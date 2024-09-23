@@ -1,0 +1,745 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# General settings
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  include = TRUE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  eval = TRUE,
+  fig.width = 4 * (1 + sqrt(5)) / 2, 
+  fig.height = 4,
+  dpi = 700
+)
+knitr::opts_knit$set(root.dir = "~/Documents/01_repos/kidney_fibrosis/")
+```
+
+## Packages
+
+```{r, message=F, warning =F, include=}
+library(tidyverse)
+library(ggplot2);theme_set(cowplot::theme_cowplot(font_size = 15) + theme(panel.grid.major = element_line(colour = "lightgrey", linewidth = 0.2), panel.grid.minor = element_line(colour = "lightgrey", linewidth = 0.2)))
+library("reshape2")
+library(ggrepel)
+library(knitr)
+library(Biostrings)
+library(RColorBrewer)
+library(visNetwork)
+
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+```
+
+```{r}
+options(ggplot2.discrete.colour= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+options(ggplot2.discrete.fill= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+tilted <-  theme(axis.text.x = element_text(angle = 45, hjust =1, vjust = 1))
+
+pal_condition = c(
+  "TGF" = "#FEA873FF",
+  "control" = "#D9D9D9")
+
+pal_cond_time <- c(
+  "ctrl_0h" = "#F0F0F0",
+  "ctrl_0.08h" = "#D9D9D9",
+  "ctrl_1h" = "#BDBDBD",
+  "ctrl_12h" = "#969696",
+  "ctrl_24h" = "#737373",
+  "ctrl_48h" = "#525252",
+  "ctrl_72h" = "#252525",
+  "ctrl_96h" = "#000000",
+  "TGF_0h" = "#FCFDBFFF",
+  "TGF_0.08h" =  "#FED395FF",
+  "TGF_1h" = "#FEA873FF",
+  "TGF_12h" = "#F97C5DFF",
+  "TGF_24h" = "#E95562FF",
+  "TGF_48h" = "#C83E73FF" ,
+  "TGF_72h" = "#A3307EFF",
+  "TGF_96h" =   "#7D2482FF"
+)
+
+pal_omics <-
+  c(
+    "Transcriptome" = "mediumvioletred",
+    "Proteome"= "darkslategrey",
+    "Phosphoproteome" ="darkcyan", 
+    "Secretome" = "darkseagreen3"
+  )
+
+
+pal_direction <-
+  c(
+    "down" = "dodgerblue4",
+    "no direction" = "grey90",
+    "up" = "indianred3"
+  )
+
+pal_nodes <- c("TF" = "mediumvioletred", "Kinase/\nphosphatase" = "darkcyan", "Secreted proteins" = "darkseagreen3", "PKN" = "grey")
+```
+
+
+```{r}
+load("data/2024-08-15_data_list.RData")
+load("data/2024-08-15_diff_results.RData")
+load("data/2024-08-27_imaging_validations_finaldf.RData")
+load("data/2024-07-24_tf_enrichment_results.RData")
+load("data/2024-07-24_kinase_enrichment_result.RData")
+load("data/networkinput_object.RData")
+load("data/2024-08-16_res_network.RData")
+load("data/2024-09-19_res_qPCR.RData")
+```
+
+
+# Main
+
+## A scheme
+
+Scheme
+
+## B imaging
+
+```{r}
+res_imaging_validations$data %>%
+  filter(
+    siRNA %in% c("siNeg9","siE2F1a", "siE2F1b", "siFLI1a", "siFLI1b", "siSMAD1b", "siNR4A1", "siHNF4G",  "siBHLHE40")
+    ) %>%
+  filter(!(condition == "ctrl" & siRNA != "siNeg9")) %>% 
+  mutate(siRNA = ifelse(siRNA == "siNeg9", paste(siRNA, condition), siRNA)) %>% 
+  mutate(siRNA = factor(siRNA, levels = c("siNeg9 ctrl", "siNeg9 TGF","siE2F1a", "siE2F1b", "siFLI1a", "siFLI1b","siSMAD1b", "siNR4A1", "siHNF4G",  "siBHLHE40"))) %>% 
+  ggplot(aes(x = siRNA, y = FC_intensity)) +
+  geom_hline(yintercept = res_imaging_validations$intercepts$TGF, color = "gray26", linetype = 4, size = 1) +
+  geom_hline(yintercept = res_imaging_validations$intercepts$ctl, color = "gray26", size = 1) +
+  geom_violin(fill = "white", colour = "mediumvioletred") +
+  geom_sina(aes(fill = siRNA), size = 3, alpha = 0.6, shape = 21, colour = "grey")+
+  stat_summary(geom = "crossbar", fun= median, color = "black", linewidth = 0.4)+
+  ggpubr::stat_compare_means(ref.group = "siNeg9 TGF", label = "..p.signif..", method = 't.test', hide.ns = T, size = 6, label.y = 7.7)+
+  scale_fill_manual(values = c("siNeg9" = "darkgrey",
+                                "siNR4A1" = "mediumvioletred", #424242
+                                "siHNF4G" = "mediumvioletred", #757575
+                                "siBHLHE40" ="mediumvioletred", #9E9E9E
+                                "siE2F1a" = "mediumvioletred",
+                                "siE2F1b" = "mediumvioletred",
+                                "siFLI1a" = "mediumvioletred",
+                                "siFLI1b" = "mediumvioletred",
+                                "siSMAD1a"= "mediumvioletred",
+                                "siSMAD1b" = "mediumvioletred")) +
+  #facet_wrap(~ condition)+
+  ylab("Col1/cell norm to siNeg9 ctrl")+
+  ylim(-1,8) +
+  #cowplot::panel_border()+
+  tilted
+```
+
+## C FLI subnetwork
+
+```{r}
+int <- c("RELA", "HDAC1", "FLI1", "TGFB1", "MAPK1")
+
+edges <- res_network$combined_edges_df %>% 
+  filter(network == "early") %>% 
+  mutate(dashes = ifelse(grepl("-1", sign), TRUE, FALSE)) %>% 
+  select(from = source, to = target,dashes) %>% 
+  filter(from %in% int & to %in% int) %>% 
+  distinct(from, to,dashes)
+
+
+
+nodes <- res_network$node_df %>% 
+  filter(node %in% c(edges$from, edges$to) & !(grepl("_", node))) %>% 
+  mutate(id = node, direction =  ifelse(value == -1, "down", "up")) %>% 
+  mutate(group = paste0(type, direction)) %>% 
+  distinct(group, id, type) %>% 
+  distinct(id, .keep_all = T) %>% 
+  mutate(group = ifelse(id == "TGFB1", "perturbation", group))
+
+set.seed(1)
+p <- visNetwork(nodes, edges) %>%
+  # standard options
+  visGroups(groupname = "PKNup", color = "grey") %>%
+  visGroups(groupname = "perturbation", color = "#FEA873FF") %>%
+  visGroups(groupname = "TFdown", color = "pink") %>%
+  visGroups(groupname = "TFup", color = "mediumvioletred") %>%
+  visGroups(groupname = "Secreted proteinsup", color = "#8FBC8F") %>%
+  visEdges(arrows = "to", color = "dimgrey", width = 2) %>%
+  visNodes(font = "30px arial black bold") %>%
+  visLegend() %>%
+  visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+  visNetwork::visIgraphLayout(layout = "layout_with_fr")
+p
+```
+
+## D FLI1 qPCR
+
+FLI1
+
+
+```{r}
+res_qPCR$data %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(grepl("FLI1$", siRNA) & gene %in% c("COL1A1")) %>% 
+  mutate(gene = factor(gene, levels = c("COL1A1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() +
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  facet_wrap(~gene) +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated\ncells at 48h)", x = "treatment duration [h]") 
+```
+
+```{r}
+res_qPCR$pdata %>%  filter(grepl("FLI1", siRNA) & gene %in% c("COL1A1")) %>%  arrange( treatment, time)
+```
+
+
+
+## E Mapk1 profile
+
+```{r}
+int <- c( "MAPK1")
+#int <- c("PAX8")
+#int <- c("TNC", "POSTN", "FN1")
+#int <- c("SP1")
+
+df <- diff_results %>%
+  filter(feature_id %in% int) %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+  mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+  mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+  mutate(modality = ifelse(modality == "secretomics", "Secretome", modality)) %>% 
+  select(time, logFC, modality, feature_id) %>% 
+  bind_rows(
+     res_kinase_enrichment$enrichment %>% 
+   filter(source %in% int & statistic == "norm_wmean" ) %>%
+   mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  select(feature_id = source, time, logFC = score) %>% 
+  mutate(modality = "activity")
+  )
+
+dummy_df <- data.frame(
+  modality = c(unique(df$modality)),
+  time = 0,
+  logFC = 0
+)
+
+
+abundance_df <- df %>%
+  bind_rows(dummy_df) %>%
+  ungroup() %>%
+  tidyr::complete(time, modality, feature_id, fill = list(logFC = 0)) %>%
+  filter(!is.na(feature_id))
+
+abundance_df %>% 
+  mutate(data = ifelse(modality == "activity", "activity", "abundance")) %>% 
+  mutate(feature_id = factor(feature_id, levels = int)) %>% 
+  ggplot(aes(x = time, y = logFC, group = modality, colour = modality, linetype = data)) +
+  geom_hline(yintercept = 0) +
+  geom_point(size = 2) +
+  geom_smooth(method = loess,method.args = list(span = 0.35, degree = 1),linewidth = 1, se = F) +
+  scale_colour_manual(values = c("darkcyan","darkslategrey", "mediumseagreen", "mediumvioletred")) +
+  scale_linetype_manual(values = c(3, 1)) +
+  facet_wrap(~feature_id, scales = "free_y", ncol =3) +
+  cowplot::panel_border() +
+  labs(y = "log2 fold-change | score", x = "time [h]")
+```
+
+```{r}
+int <- diff_results %>%
+  # filter(feature_id %in% int & modality == "input_phospho")  %>%
+  filter(grepl("MAPK1", feature_id) & modality == "input_phospho" & abs(logFC) > log2(1.5) & adj.P.Val < 0.05)
+
+df <- diff_results %>%
+  filter(feature_id %in% int$feature_id & modality == "input_phospho") %>%
+  # filter(grepl("TNS1", feature_id) & modality == "input_phospho")  %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+  mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+  mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+  mutate(modality = ifelse(modality == "secretomics", "Secretome", modality))
+
+dummy_df <- data.frame(
+  modality = c(unique(df$modality)),
+  time = 0,
+  logFC = 0
+)
+
+
+df %>%
+  bind_rows(dummy_df) %>%
+  ungroup() %>%
+  tidyr::complete(time, modality, feature_id, fill = list(logFC = 0)) %>%
+  filter(!is.na(feature_id) & grepl("Y187", feature_id)) %>%
+  ggplot(aes(x = time, y = logFC, colour = modality, group = paste0(feature_id, modality), shape = feature_id)) +
+  geom_hline(yintercept = 0) +
+  geom_hline(yintercept = log2(1.5)) +
+  geom_point(size = 2) +
+  # geom_line()+
+  geom_smooth(method = loess,method.args = list(span = 0.35, degree = 1),linewidth = 1, se = F) +
+  scale_colour_manual(values = pal_omics) +
+  labs(y = "log2 fold-change", x = "treatment duration [h]")
+```
+
+## F E2F1 subnetwork
+
+```{r}
+int <- c("TGFB1","SMAD3", "PAX8", "E2F1", "SERPINE1", "SERPINE2", "PLAT", "MAPK3", "SREBF1")
+
+edges <- res_network$combined_edges_df %>% 
+  filter(network == "late") %>% 
+  mutate(dashes = ifelse(grepl("-1", sign), TRUE, FALSE)) %>% 
+  select(from = source, to = target,dashes) %>% 
+  filter(from %in% int & to %in% int) %>% 
+  distinct(from, to,dashes) %>% 
+  bind_rows(data.frame(from = c("E2F1", "SERPINE1"), to = c("SERPINE1", "PLAT"), dashes = c(TRUE, TRUE))) 
+
+
+
+nodes <- res_network$node_df %>% 
+  filter(network == "late") %>% 
+  filter(node %in% c(edges$from, edges$to) & !(grepl("_", node))) %>% 
+  mutate(id = node, direction =  ifelse(value == -1, "down", "up")) %>% 
+  mutate(group = paste0(type, direction)) %>% 
+  distinct(group, id, type) %>% 
+  distinct(id, .keep_all = T) %>% 
+  mutate(group = ifelse(id == "TGFB1", "perturbation", group))
+
+set.seed(1)
+p <- visNetwork(nodes, edges) %>%
+  # standard options
+  visGroups(groupname = "PKNup", color = "grey") %>%
+  visGroups(groupname = "PKNdown", color = "lightgrey") %>%
+  visGroups(groupname = "perturbation", color = "#FEA873FF") %>%
+  visGroups(groupname = "TFdown", color = "pink") %>%
+  visGroups(groupname = "TFup", color = "mediumvioletred") %>%
+  visGroups(groupname = "Secreted proteinsup", color = "#8FBC8F") %>%
+  visEdges(arrows = "to", color = "dimgrey", width = 2) %>%
+  visNodes(font = "30px arial black bold") %>%
+  visLegend() %>%
+  visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+  visNetwork::visIgraphLayout(layout = "layout_with_fr")
+p
+```
+
+
+## G Pax8, Srebf1 profile
+
+```{r}
+int <- c( "PAX8", "SREBF1")
+#int <- c("PAX8")
+#int <- c("TNC", "POSTN", "FN1")
+#int <- c("SP1")
+
+df <- diff_results %>%
+  filter(feature_id %in% int) %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+  mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+  mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+  mutate(modality = ifelse(modality == "secretomics", "Secretome", modality)) %>% 
+  select(time, logFC, modality, feature_id) %>% 
+  bind_rows(
+     res_kinase_enrichment$enrichment %>% 
+   filter(source %in% int & statistic == "norm_wmean" ) %>%
+   mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  select(feature_id = source, time, logFC = score) %>% 
+  mutate(modality = "activity")
+  )%>% 
+  bind_rows(
+     res_tf_enrichment$enrichment %>% 
+   filter(source %in% int) %>%
+   mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  select(feature_id = source, time, logFC = score) %>% 
+  mutate(modality = "activity")
+  )
+
+dummy_df <- data.frame(
+  modality = c(unique(df$modality)),
+  time = 0,
+  logFC = 0
+)
+
+
+abundance_df <- df %>%
+  bind_rows(dummy_df) %>%
+  ungroup() %>%
+  tidyr::complete(time, modality, feature_id, fill = list(logFC = 0)) %>%
+  filter(!is.na(feature_id))
+
+abundance_df %>% 
+  mutate(data = ifelse(modality == "activity", "activity", "abundnace")) %>% 
+  mutate(feature_id = factor(feature_id, levels = int)) %>% 
+  ggplot(aes(x = time, y = logFC, group = modality, colour = modality, linetype = data)) +
+  geom_hline(yintercept = 0) +
+  geom_point(size = 2) +
+  #geom_line() +
+  geom_smooth(method = loess,method.args = list(span = 0.36, degree = 1),linewidth = 1, se = F) +
+  scale_colour_manual(values = c("mediumvioletred", "darkslategrey","mediumvioletred")) +
+  scale_linetype_manual(values = c(3, 1)) +
+  facet_wrap(~feature_id, scales = "free_y", ncol =3) +
+  cowplot::panel_border() +
+  labs(y = "log2 fold-change | score", x = "time [h]")
+```
+
+## H E2F1 qpcr
+
+
+```{r}
+res_qPCR$data %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(grepl("E2F1$", siRNA) & gene %in% c("COL1A1", "SERPINE1")) %>% 
+  mutate(gene = factor(gene, levels = c("COL1A1", "SERPINE1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() +
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  #scale_shape_manual(values = c(21, 22)) +
+  facet_wrap(~gene, ncol=3) +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated cells at 48h)", x = "treatment duration [h]") 
+```
+
+```{r}
+res_qPCR$pdata %>%  filter(grepl("E2F1$", siRNA) & gene %in% c("SERPINE1", "COL1A1")) %>%  arrange(gene, treatment, time)
+```
+
+
+```{r}
+res_qPCR$data %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(grepl("E2F1", siRNA) & gene %in% c("E2F1")) %>% 
+  mutate(gene = factor(gene, levels = c("E2F1", "COL1A1", "SERPINE1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() + 
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  #scale_shape_manual(values = c(21, 22)) +
+  facet_wrap(~gene+set, ncol=3) +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated cells at 48h)", x = "treatment duration [h]") 
+```
+
+
+# Sup
+
+## A
+
+
+```{r}
+res_imaging_validations$data %>%
+  filter(!(siRNA %in% c("siFN1", "siSMAD1a", "siSMAD1b"))) %>% 
+  mutate(siRNA = str_replace(siRNA, "75", "a")) %>% 
+  mutate(siRNA = str_replace(siRNA, "76", "b")) %>% 
+  mutate(siRNA = str_replace(siRNA, "77", "c")) %>% 
+  mutate(siRNA = str_replace(siRNA, "siSMAD1c", "siSMAD1")) %>% 
+  mutate(siRNA = factor(siRNA, levels = c(
+   "siNeg9", "siSMAD1", "siNR4A1", "siHNF4G", "siBHLHE40", "siE2F1a", "siE2F1b", "siFLI1a", "siFLI1b", "siCOL1A1a", "siCOL1A1b", "siCOL1A1c"))) %>% 
+  ggplot(aes(x = siRNA, y = FC_intensity)) +
+  geom_hline(yintercept = res_imaging_validations$intercepts$TGF, color = "gray26", linetype = 4, size = 1) +
+  geom_hline(yintercept = res_imaging_validations$intercepts$ctl, color = "gray26", size = 1) +
+  ggforce::geom_sina(fill = "grey", size = 3, alpha = 0.6, shape = 21, colour = "grey")+
+  stat_summary(geom = "crossbar", fun= median, color = "black", linewidth = 0.4)+
+  ggpubr::stat_compare_means(ref.group = "siNeg9", label = "..p.signif..", method = 't.test', hide.ns = T, size = 6, label.y = 7.7)+
+  facet_wrap(~ condition)+
+  ylab("Col1/cell norm to siNeg9 ctrl")+
+  ylim(-1,8) +
+  cowplot::panel_border()+
+  tilted
+```
+
+
+## B
+
+
+```{r}
+data_df_combined %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(siRNA == "siE2F1" & gene %in% c("E2F1", "COL1A1", "SERPINE1")) %>% 
+  mutate(gene = factor(gene, levels = c("E2F1", "COL1A1", "SERPINE1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() +
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  #scale_shape_manual(values = c(21, 22)) +
+  facet_wrap(~gene, ncol=3) +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated cells at 48h)", x = "treatment duration [h]") 
+```
+
+
+## C
+
+```{r}
+f <- "SERPINE1"
+
+data <- diff_results %>% 
+  filter(feature_id ==f) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h")),
+          hit = ifelse(adj.P.Val < 0.05 & abs(logFC) > log2(1.5), "hit", "no hit")) %>%
+  #filter(hit == "hit") %>% 
+  acast(feature_id ~ time + modality, value.var = "logFC", fill = NaN)
+
+data2 <- diff_results %>% 
+filter(feature_id ==f) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h")),
+          hit = ifelse(adj.P.Val < 0.05 & abs(logFC) > log2(1.5), "hit", "no hit")) %>%
+  #filter(hit == "hit") %>% 
+  acast(feature_id ~ time + modality, value.var = "adj.P.Val", fill = 1)
+
+
+col_order <- c(
+  "12h_secretomics", "24h_secretomics", "48h_secretomics", "72h_secretomics", "96h_secretomics",
+  "0.08h_proteomics", "1h_proteomics", "12h_proteomics", "24h_proteomics", "48h_proteomics", "72h_proteomics", "96h_proteomics",
+  "0.08h_rna", "1h_rna", "12h_rna", "24h_rna", "48h_rna", "72h_rna", "96h_rna"
+  )
+
+data <- data[,col_order]  %>%  t
+#
+data2<- data2[,col_order] %>%  t
+
+data %>% 
+  ComplexHeatmap::Heatmap(na_col = "white",
+   # km = 3,
+    rect_gp = grid::gpar(col = "white", lwd = 0.5),
+   cluster_rows=F,
+  cluster_columns = F, 
+  show_row_dend = F,
+  show_column_dend = F,
+  show_row_names = T,
+   row_names_gp = grid::gpar(fontsize = 8),  
+   column_names_gp = grid::gpar(fontsize = 7),  
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(data2[i] < 0.05) {
+        grid::grid.text("*", x, y)
+    }
+    },
+  col = circlize::colorRamp2(c(-2, 0, 2), c("dodgerblue4", "grey95","darkred")),
+  name = "log2FC"
+  )
+  
+```
+
+
+## D SMAD1 efficiency
+
+```{r}
+res_qPCR$data %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(grepl("SMAD1", siRNA) & gene %in% c("SMAD1")) %>% 
+  mutate(gene = factor(gene, levels = c("SMAD1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() +
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  facet_wrap(siRNA~gene, ncol=2, scales = "free") +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated\ncells at 48h)", x = "treatment duration [h]") 
+```
+
+
+## FLI1 KO efficiency
+
+```{r}
+res_qPCR$data %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(grepl("FLI1", siRNA) & gene %in% c("FLI1")) %>% 
+  mutate(gene = factor(gene, levels = c("FLI1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() +
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  facet_wrap(siRNA~gene, ncol=2, scales = "free") +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated\ncells at 48h)", x = "treatment duration [h]") 
+```
+
+## FLI1 COL1A1 b
+
+```{r}
+res_qPCR$data %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(grepl("FLI1_b", siRNA) & gene %in% c("COL1A1")) %>% 
+  mutate(gene = factor(gene, levels = c("COL1A1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() +
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  facet_wrap(siRNA~gene, ncol=2, scales = "free") +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated\ncells at 48h)", x = "treatment duration [h]") 
+```
+
+## E2F1 KO efficiency
+
+```{r}
+res_qPCR$data %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(grepl("E2F1", siRNA) & gene %in% c("E2F1")) %>% 
+  mutate(gene = factor(gene, levels = c("E2F1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() +
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  #scale_shape_manual(values = c(21, 22)) +
+  facet_wrap(~gene+siRNA, ncol=3) +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated\ncells at 48h)", x = "treatment duration [h]") 
+```
+
+## E2F1b
+
+```{r}
+res_qPCR$data %>% 
+  mutate(treatment = ifelse(treatment == "ctrl", "control", treatment)) %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  #summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(variable, treatment, sep = "_"))%>% 
+  filter(grepl("E2F1b", siRNA) & gene %in% c("COL1A1", "SERPINE1")) %>% 
+  mutate(gene = factor(gene, levels = c("COL1A1", "SERPINE1"))) %>% 
+  mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  ggplot(aes(x = time, 
+             y = value, 
+             colour = treatment, 
+             fill = treatment, 
+             group = group, 
+             shape = variable)) +
+  geom_hline(yintercept = 100) +
+  #geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1, size = 0.6)+
+  geom_smooth(aes(linetype = variable), method = loess,method.args = list(span = 0.7, degree = 1),size = 2) +
+  geom_point() +
+  stat_summary(aes(group = paste0(variable, group)), fun = mean, geom = "Crossbar", colour = "black", width = 2, size = 0.3) +
+  scale_linetype_manual(values = c(3,1)) +
+  scale_color_manual(values = pal_condition) +
+  scale_fill_manual(values = pal_condition) +
+  #scale_shape_manual(values = c(21, 22)) +
+  facet_wrap(~gene+siRNA, ncol=3) +
+  cowplot::panel_border()+
+  labs(y = "mRNA levels\n(% of siNeg9 treated\ncells at 48h)", x = "treatment duration [h]") 
+```
+
+
+
+
+
+

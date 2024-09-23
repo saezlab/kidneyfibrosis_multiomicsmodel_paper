@@ -1,0 +1,871 @@
+---
+title: "Compare Nadines multi-omics data to other studies"
+output:
+  html_document:
+    keep_md: yes
+    toc: yes
+    theme: united
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# General settings
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  include = TRUE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  eval = TRUE,
+  fig.width = 4 * (1 + sqrt(5)) / 2, 
+  fig.height = 4,
+  dpi = 700
+)
+knitr::opts_knit$set(root.dir = "~/Documents/01_repos/kidney_fibrosis/")
+```
+
+## Packages
+
+```{r, message=F, warning =F, include=}
+library(tidyverse)
+library(ggplot2);theme_set(cowplot::theme_cowplot(font_size = 15) + theme(panel.grid.major = element_line(colour = "lightgrey", linewidth = 0.2), panel.grid.minor = element_line(colour = "lightgrey", linewidth = 0.2)))
+library("reshape2")
+library(ggrepel)
+library(knitr)
+library(Biostrings)
+library(RColorBrewer)
+
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+```
+
+```{r}
+options(ggplot2.discrete.colour= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+options(ggplot2.discrete.fill= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+tilted <-  theme(axis.text.x = element_text(angle = 45, hjust =1, vjust = 1))
+
+pal_condition = c(
+  "TGF-\u03b2" = "#FEA873FF",
+  "control" = "#D9D9D9")
+
+pal_cond_time <- c(
+  "ctrl_0h" = "#F0F0F0",
+  "ctrl_0.08h" = "#D9D9D9",
+  "ctrl_1h" = "#BDBDBD",
+  "ctrl_12h" = "#969696",
+  "ctrl_24h" = "#737373",
+  "ctrl_48h" = "#525252",
+  "ctrl_72h" = "#252525",
+  "ctrl_96h" = "#000000",
+  "TGF_0h" = "#FCFDBFFF",
+  "TGF_0.08h" =  "#FED395FF",
+  "TGF_1h" = "#FEA873FF",
+  "TGF_12h" = "#F97C5DFF",
+  "TGF_24h" = "#E95562FF",
+  "TGF_48h" = "#C83E73FF" ,
+  "TGF_72h" = "#A3307EFF",
+  "TGF_96h" =   "#7D2482FF"
+)
+
+pal_omics <-
+  c(
+    "Transcriptome" = "mediumvioletred",
+    "Proteome"= "darkslategrey",
+    "Phosphoproteome" ="darkcyan", 
+    "Secretome" = "darkseagreen3"
+  )
+
+
+pal_direction <-
+  c(
+    "down" = "dodgerblue4",
+    "no direction" = "grey90",
+    "up" = "indianred3"
+  )
+
+pal_tgf <-  c(
+  "TGF_0h" = "#FCFDBFFF",
+  "TGF_0.08h" =  "#FED395FF",
+  "TGF_1h" = "#FEA873FF",
+  "TGF_12h" = "#F97C5DFF",
+  "TGF_24h" = "#E95562FF",
+  "TGF_48h" = "#C83E73FF" ,
+  "TGF_72h" = "#A3307EFF",
+  "TGF_96h" =   "#7D2482FF"
+)
+
+```
+
+```{r}
+secreted_proteins <- msigdbr::msigdbr(species = "Homo sapiens") %>% 
+  filter(gs_id %in% c('M5889', 'M5885'))
+
+
+myo_genes <- openxlsx::read.xlsx("data/41586_2020_2941_MOESM4_ESM.xlsx", sheet = "Human_PDGFRBplus_Level2_Specifi") %>% 
+  separate(`X1`, into = c("ensembl", "Gene"), remove = T, sep = ";") %>% 
+  separate(Gene, into = c("Gene", "iso"), sep = "\\.", remove = F) %>% 
+  group_by(Gene) %>% 
+  summarise_all(.funs = mean) %>%  select(Gene, Myofibroblasts) %>% 
+  filter(Myofibroblasts > 0.2)
+
+load("data/processed_data/2024-08-15_data_list.RData")
+load("data/processed_data/2024-08-15_diff_results.RData")
+load("results/2024-07-24_tf_enrichment_results.RData")
+load("results/2024-07-24_kinase_enrichment_result.RData")
+load("results/2024-09-02_pathwayenrichment_results.RData")
+```
+
+# A biomarkers
+
+```{r}
+int <- c("TNC", "POSTN", "FN1", "SFRP2", "SERPINE1", "CCN2", "CDH11", "LTBP2", "BGN", "HTRA1", "IGFBP3", "IGFBP7", "CPA4", "COL1A1")
+int <- c("FN1", "TNC", "POSTN", "TGFBI", "COL1A1", "COL3A1", "COL6A1")
+# int <- c("COL1A2", "COL1A1", "FN1")
+# int <- diff_results %>% 
+#   filter(grepl("^COL", feature_id))
+# int <- unique(int$feature_id)
+
+df <- diff_results %>%
+  filter(feature_id %in% int) %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+  mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+  mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+  mutate(modality = ifelse(modality == "secretomics", "Secretome", modality))
+
+dummy_df <- data.frame(
+  modality = c(unique(df$modality)),
+  time = 0,
+  logFC = 0
+)
+
+
+df %>%
+  bind_rows(dummy_df) %>%
+  ungroup() %>%
+  tidyr::complete(time, modality, feature_id, fill = list(logFC = 0)) %>%
+  filter(!is.na(feature_id)) %>%
+  group_by(feature_id, modality) %>% 
+  mutate(sum = sum(abs(logFC))) %>% 
+  filter(sum > 0) %>% 
+  ggplot(aes(x = time, y = logFC, group = modality, colour = modality)) +
+  geom_hline(yintercept = 0) +
+  geom_hline(yintercept = c(log2(1/1.5), log2(1.5)), linetype =3) +
+  geom_point(size = 2) +
+  geom_line(size = 0.8) +
+  #geom_smooth(method = loess,method.args = list(span = 0.3, degree = 1),linewidth = 1, se = F) +
+  scale_colour_manual(values = pal_omics) +
+  facet_wrap(~feature_id, nrow = 2, scales = "free") +
+  cowplot::panel_border() +
+  labs(y = "log2 fold-change TGF-\u03b2/control", x = "treatment duration [h]")
+
+
+
+```
+
+#B phospho
+
+```{r}
+int <- diff_results %>%
+  # filter(feature_id %in% int & modality == "input_phospho")  %>%
+  filter(grepl("TNS1", feature_id) & modality == "input_phospho" & abs(logFC) > log2(1.5) & adj.P.Val < 0.05)
+
+df <- diff_results %>%
+  filter(feature_id %in% int$feature_id |feature_id == "TNS1") %>%
+  filter(modality != "phospho")  %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+  mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+  mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+  mutate(modality = ifelse(modality == "secretomics", "Secretome", modality))
+
+dummy_df <- data.frame(
+  modality = c(unique(df$modality)),
+  time = 0,
+  logFC = 0
+)
+
+
+
+tmp <- df %>%
+  bind_rows(dummy_df) %>%
+  ungroup() %>%
+  #tidyr::complete(time, modality, feature_id, fill = list(logFC = 0)) %>%
+  filter(!is.na(feature_id)) %>% 
+mutate(Gene = "TNS1",
+       group = ifelse(modality == "Phosphoproteome", paste0(feature_id, modality), modality))
+
+
+tmp %>% 
+  ggplot(aes(x = time, y = logFC, colour = modality, group = paste0(feature_id, modality), shape = feature_id)) +
+  geom_hline(yintercept = 0) +
+  geom_hline(yintercept = c(log2(1/1.5), log2(1.5)), linetype =3) +
+  geom_point(size = 2) +
+  geom_line(data = tmp %>% filter(modality == "Phosphoproteome"), linewidth = 0.5, alpha =0.2)+
+  geom_line(data = tmp %>% filter(modality != "Phosphoproteome"), linewidth = 1, alpha =1)+
+  geom_smooth(data = tmp %>% filter(modality == "Phosphoproteome"),  aes(group = modality), linewidth = 1, se = F) +
+  scale_colour_manual(values = pal_omics) +
+  scale_shape_manual(values = c(1:10)) +
+  facet_wrap(~Gene, nrow = 2, scales = "free") +
+  cowplot::panel_border() +
+  labs(y = "", x = "")
+```
+
+
+### structure
+
+
+```{r}
+library(protti)
+# Input UniProt IDs
+uniprot_ids <- c("Q9HBL0")
+
+ptsi_pgk_prediction_information <- fetch_alphafold_prediction(
+  uniprot_ids = uniprot_ids,
+  return_data_frame = TRUE)
+
+ptsi_pgk_prediction_information %>%
+    mutate(map_value = 100, pdb_id = NA) %>% 
+  map_peptides_on_structure(
+    uniprot_id = uniprot_id,
+    pdb_id = pdb_id,
+    chain = auth_asym_id,
+    auth_seq_id = auth_seq_id,
+    map_value = map_value,
+    file_format = ".pdb",
+    export_location = "~/Documents/01_repos/kidney_fibrosis/"
+  )
+
+# Load the r3dmol package
+library(r3dmol)
+
+# Create structure
+r3dmol(
+    viewer_spec = m_viewer_spec(
+    cartoonQuality = 50,
+    lowerZoomLimit = 0,
+    upperZoomLimit = 600
+  )
+) %>%
+  m_add_model(data = "~/Documents/01_repos/kidney_fibrosis/Q9HBL0_AlphaFold.pdb", format = "pdb") %>%
+    m_set_style(
+    style = c(
+      m_style_cartoon(color = "#fcfcfc")
+    )
+  ) %>%
+  m_add_sphere(
+    center = m_sel(resi = "103"), radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+  m_add_sphere(
+    center = m_sel(resi = "491"), radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+    m_add_sphere(
+    center = m_sel(resi = "570"),radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+    m_add_sphere(
+    center = m_sel(resi = "583"),radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+    m_add_sphere(
+    center = m_sel(resi = "1024"),radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+    m_add_sphere(
+    center = m_sel(resi = "1209"),radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+    m_add_sphere(
+    center = m_sel(resi = "1223"),radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+    m_add_sphere(
+    center = m_sel(resi = "1497"),radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+    m_add_sphere(
+    center = m_sel(resi = "1550"),radius = 3,
+    spec = m_shape_spec(color = "darkcyan", wireframe = TRUE)
+  ) %>%
+  m_zoom_to() 
+
+```
+
+
+
+# C pathways
+
+
+```{r, fig.width=12}
+int <- c("EPITHELIAL_MESENCHYMAL_TRANSITION", "TGF_BETA_SIGNALING")
+  
+df <- decoupler_results %>%
+    filter(statistic == "norm_wmean") %>%
+    filter(source %in% int) %>%
+    mutate(time = factor(condition, levels = c("0h", "0.08h", "1h", "12h", "24h", "48h", "72h", "96h"))) %>%
+    mutate(time = as.numeric(str_remove(time, "h"))) %>%
+    mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+    mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+    mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+    mutate(modality = ifelse(modality == "secretomics", "Secretome", modality))
+
+dummy_df <- data.frame(modality = c(unique(df$modality)),
+                       time = 0,
+                       score = 0,
+                       source = int)  
+  
+df %>%   
+  bind_rows(dummy_df) %>% 
+  ungroup() %>% 
+  tidyr::complete(time, modality, source, fill = list(score = 0)) %>% 
+  mutate(source = factor(source, levels = int)) %>% 
+  ggplot(aes(y = score, x= time, colour = modality, group = paste0(modality, source))) +
+  geom_hline(yintercept = 0) +
+  geom_point(size = 2) +
+  geom_line(size = 0.8) +
+  #geom_smooth(method = loess,method.args = list(span = 0.35, degree = 2),linewidth = 1, se = F) +
+  scale_colour_manual(values = pal_omics) +
+  facet_wrap(~source, nrow =1) +
+  cowplot::panel_border() +
+  theme(strip.text = element_blank()) +
+  labs(y = "pathway enrichment score", x = "treatment duration [h]")
+```
+
+```{r}
+
+int <- c("INTERFERON_ALPHA_RESPONSE", "INTERFERON_GAMMA_RESPONSE")
+  
+df <- decoupler_results %>%
+    filter(statistic == "norm_wmean") %>%
+    filter(source %in% int) %>%
+    mutate(time = factor(condition, levels = c("0h", "0.08h", "1h", "12h", "24h", "48h", "72h", "96h"))) %>%
+    mutate(time = as.numeric(str_remove(time, "h"))) %>%
+    mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+    mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+    mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+    mutate(modality = ifelse(modality == "secretomics", "Secretome", modality))
+
+dummy_df <- data.frame(modality = c(unique(df$modality)[1:2]),
+                       time = 0,
+                       score = 0,
+                       source = int)  
+  
+df %>%   
+  bind_rows(dummy_df) %>% 
+  ungroup() %>% 
+  tidyr::complete(time, modality, source, fill = list(score = 0)) %>% 
+  mutate(source = factor(source, levels = int)) %>% 
+  ggplot(aes(y = score, x= time, colour = modality, group = paste0(modality, source))) +
+  geom_hline(yintercept = 0) +
+  geom_point(size = 2) +
+  geom_line(size = 0.8) +
+  #geom_smooth(method = loess,method.args = list(span = 0.35, degree = 2),linewidth = 1, se = F) +
+  scale_colour_manual(values = pal_omics) +
+  facet_wrap(~source, nrow =1) +
+  cowplot::panel_border() +
+  theme(strip.text = element_blank()) +
+  labs(y = "pathway enrichment score", x = "treatment duration [h]")
+```
+
+
+# D footprinting
+
+TFs: SMAD4, SRF, TEAD4, EPAS1, GLI1, STAT2, FOXM1, KMT2A, FLI1 
+Kinases: PTK2, SRC, AKT3, MAP2K1, MAPK1, ROCK1,CSNK2A1, CSNK2A2, RHOA, PRKD1
+
+### TFs
+
+
+
+```{r}
+hit_tfs <- c("SMAD4", "SRF", "TEAD4", 'EPAS1', "GLI1", "STAT2", "FOXM1", "KMT2A", "FLI1" )
+
+res_tf_enrichment$enrichment %>%
+  filter(source %in% hit_tfs ) %>%
+  mutate(time = factor(time, levels = c("0.08h", "1h", "12h", "24h", "48h", "72h", "96h"))) %>%
+  ggplot(aes(x = score, y = reorder(source, score), fill = time)) +
+  geom_vline(xintercept = 0) +
+  geom_vline(xintercept = c(-3, 3), linetype = 2) +
+  geom_bar(stat = "identity", pos = "dodge", colour = "grey70") +
+  scale_fill_manual(values = (unname(pal_tgf))) +
+  geom_vline(xintercept = 0)+
+  coord_flip() +
+  tilted +
+  labs(x = "TF enrichment score", y = "")
+```
+
+
+### kinases
+
+
+
+```{r}
+hit_kinases <- c("PTK2", "SRC", "AKT3", "MAP2K1", "MAPK1", "ROCK1","CSNK2A1", "CSNK2A2", "RHOA", "PRKD1")
+
+res_kinase_enrichment$enrichment %>%
+  filter(source %in% hit_kinases & statistic == "norm_wmean") %>%
+  mutate(time = factor(time, levels = c("0.08h", "1h", "12h", "24h", "48h", "72h", "96h"))) %>%
+  ggplot(aes(x = score, y = reorder(source, score), fill = time)) +
+  geom_vline(xintercept = 0) +
+  geom_vline(xintercept = c(-1.7, 1.7), linetype = 2) +
+  geom_bar(stat = "identity", pos = "dodge", colour = "grey70") +
+  scale_fill_manual(values = (unname(pal_tgf))) +
+  geom_vline(xintercept = 0)+
+  coord_flip() +
+  tilted +
+  labs(x = "Kinase enrichment score", y = "kinase")
+```
+
+# E TF heatmap
+
+```{r}
+hit_tfs <- res_tf_enrichment$enrichment %>% 
+  filter(p_value < 0.03 & statistic == "mlm" & abs(score) > 3)
+
+m <- res_tf_enrichment$enrichment %>%
+  filter(source %in% hit_tfs$source& statistic == "mlm") %>% 
+  mutate(time = factor(time, levels=c("0.08h", "1h", "12h", "24h", "48h", "72h", "96h"))) %>% 
+  mutate(modality = "activity") %>% 
+  dcast(time + modality ~source, value.var = "score",fill = NaN)
+
+m_abun <- diff_results %>%  
+  filter(feature_id %in% colnames(m)) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h"))) %>%
+  dcast(time + modality ~ feature_id, value.var = "logFC", fill = NaN)
+
+m_comb <- bind_rows(m, m_abun) %>% 
+  filter(modality != "secretomics") %>% 
+  unite(id, c("time", "modality")) %>% 
+  #filter(!grepl("activity", id)) %>% 
+  column_to_rownames("id") %>% 
+  as.matrix()
+
+p_data <- res_tf_enrichment$enrichment %>%
+  filter(p_value < 0.03 & statistic == "mlm" & abs(score) >3) %>% 
+   mutate(modality = "activity") %>% 
+  acast(time + modality ~source, value.var = "p_value", fill = 1)
+
+p_data_comb <- res_tf_enrichment$enrichment %>%
+  filter(p_value < 0.03 & statistic == "mlm" & abs(score) > 3) %>%
+  mutate(modality = "activity") %>%
+  dcast(time + modality ~ source, value.var = "p_value", fill = 1) %>%
+  bind_rows(diff_results %>%
+    filter(feature_id %in% colnames(m)) %>%
+    dcast(time + modality ~ feature_id, value.var = "adj.P.Val", fill = 1)) %>%
+   filter(modality != "secretomics") %>% 
+  unite(id, c("time", "modality")) %>%
+  # filter(!grepl("activity", id)) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+p_data_comb[is.na(p_data_comb)] <- 1
+```
+
+export this with all data and then combine with separate activity data to hace two different colour scales
+
+```{r}
+order <- rev(c(
+  "0.08h_activity", "1h_activity", "12h_activity", "24h_activity", "48h_activity", "72h_activity", "96h_activity",
+  "0.08h_proteomics", "1h_proteomics", "12h_proteomics", "24h_proteomics", "48h_proteomics", "72h_proteomics", "96h_proteomics",
+  "0.08h_rna", "1h_rna", "12h_rna", "24h_rna", "48h_rna", "72h_rna", "96h_rna"
+))
+
+m_comb <- m_comb[order,] 
+p_data_comb <- p_data_comb[order,]  
+
+set.seed(1)
+ht <- m_comb %>% 
+  ComplexHeatmap::Heatmap(
+    cluster_rows = F,
+    show_row_dend = F,
+    show_column_dend = F,
+    show_row_names = T,
+    column_names_gp = grid::gpar(fontsize = 7),
+    row_names_gp = grid::gpar(fontsize = 8),
+    rect_gp = grid::gpar(lwd = 2, col = "white"),  
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(p_data_comb[i, j] < 0.05) {
+        grid::grid.text("*", x, y)
+    }
+    },
+    col = circlize::colorRamp2(c(-1, 0, 1), c("dodgerblue4", "white", "darkred")),
+    name = "log2FC"
+  )
+ht <- ComplexHeatmap::draw(ht)
+ht
+tf_order<- colnames(m_comb)[ComplexHeatmap::column_order(ht)]
+```
+
+```{r}
+
+order <- rev(c(
+  "0.08h_activity", "1h_activity", "12h_activity", "24h_activity", "48h_activity", "72h_activity", "96h_activity"
+))
+
+m_act <- m %>% 
+  unite(id, c("time", "modality")) %>% 
+  column_to_rownames("id") %>% 
+  as.matrix()
+
+m_act <- m_act[order,tf_order] 
+p_data <- p_data[order,tf_order] 
+
+set.seed(1)
+m_act %>% 
+  ComplexHeatmap::Heatmap(
+    cluster_rows = F,
+    cluster_columns = F,
+    show_row_dend = F,
+    show_column_dend = F,
+    show_row_names = T,
+    column_names_gp = grid::gpar(fontsize = 7),
+    row_names_gp = grid::gpar(fontsize = 8),
+    rect_gp = grid::gpar(lwd = 2, col = "white"),  
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(p_data[i, j] < 0.05) {
+        grid::grid.text("*", x, y)
+    }
+    },
+    col = circlize::colorRamp2(c(-3, 0, 3), c("dodgerblue4", "white", "darkred")),
+    name = "tf_score"
+  )
+```
+
+# Supplementary
+## A
+```{r}
+lfc_cutoff <- log2(1.5)
+p_cutoff <- 0.05
+
+overlap <- diff_results %>%
+  subset(abs(logFC) >= lfc_cutoff & adj.P.Val <= p_cutoff) %>%
+  filter(!(modality == "rna" & abs(logFC) < log2(2))) %>% 
+  filter(!(modality == "secretomics" & !(feature_id %in% secreted_proteins$gene_symbol))) %>% 
+  filter(modality != "phospho" & modality != "input_phospho") %>%
+  # mutate(modality = ifelse(modality == "rna", "rna", "protoemics technologies")) %>%
+  # modify feature_id to be able to collapse phospho
+  ungroup() %>%
+  distinct(modality, feature_id)%>% 
+  group_by(feature_id) %>% 
+  summarise(n_hits = n_distinct(modality)) %>% 
+  filter(n_hits >1) %>% 
+  bind_rows(data.frame(feature_id = c("MARCKS", "CDH11", "NRP2", "SDC4", "TFPI", "CPA4", "CACHD1")))
+
+data <- diff_results %>% 
+  filter(modality != "phospho" & modality != "input_phospho") %>% 
+  filter(feature_id %in% overlap$feature_id) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h")),
+          hit = ifelse(adj.P.Val < 0.05 & abs(logFC) > log2(1.5), "hit", "no hit")) %>%
+  #filter(hit == "hit") %>% 
+  acast(feature_id ~ time + modality, value.var = "logFC", fill = NaN)
+
+data2 <- diff_results %>% 
+  filter(modality != "phospho" & modality != "input_phospho") %>% 
+  filter(feature_id %in% colnames(data)) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h")),
+          hit = ifelse(adj.P.Val < 0.05 & abs(logFC) > log2(1.5), "hit", "no hit")) %>%
+  filter(hit == "hit") %>% 
+  bind_rows(data.frame(time = "1h", modality = "proteomics", adj.P.Val = 1, feature_id = "dummy")) %>%  
+  acast(feature_id ~ time + modality, value.var = "adj.P.Val", fill = 1)
+
+
+col_order <- c(
+  "12h_secretomics", "24h_secretomics", "48h_secretomics", "72h_secretomics", "96h_secretomics",
+  "1h_proteomics", "12h_proteomics", "24h_proteomics", "48h_proteomics", "72h_proteomics", "96h_proteomics",
+  "1h_rna", "12h_rna", "24h_rna", "48h_rna", "72h_rna", "96h_rna"
+  )
+
+data <- data[,col_order]  %>% t
+
+data2<- data2[,col_order] %>% t
+
+data %>% 
+  ComplexHeatmap::Heatmap(na_col = "white",
+   # km = 3,
+    rect_gp = grid::gpar(col = "white", lwd = 0.5),
+   cluster_rows=F,
+  cluster_columns = T, 
+  show_row_dend = F,
+  show_column_dend = F,
+  show_row_names = T,
+   row_names_gp = grid::gpar(fontsize = 8),  
+   column_names_gp = grid::gpar(fontsize = 7),  
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(data2[i, j] < 0.05) {
+        grid::grid.text("*", x, y, gp = grid::gpar(fontsize = 6))
+    }
+    },
+  col = circlize::colorRamp2(c(-3, 0, 3), c("dodgerblue4", "grey95","darkred")),
+  name = "log2FC"
+  )
+  
+```
+
+## B
+
+```{r}
+hits <- diff_results %>%
+  filter(modality == "input_phospho") %>% 
+  mutate( hit = ifelse(adj.P.Val < 0.05 & abs(logFC) > log2(1.5), "hit", "no hit")) %>%   
+  filter(hit == "hit") %>% 
+  arrange(-abs(logFC))%>%  head(200)
+
+data <- diff_results %>% 
+  filter(modality == "input_phospho") %>% 
+  filter(feature_id %in% hits$feature_id) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h")),
+          hit = ifelse(adj.P.Val < 0.05 & abs(logFC) > log2(1.5), "hit", "no hit")) %>% 
+  acast(feature_id ~ time + modality, value.var = "logFC", fill = NaN) %>% t
+
+data2 <- diff_results %>% 
+  filter(modality == "input_phospho") %>% 
+  filter(feature_id %in% hits$feature_id) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h"))) %>%
+  acast(feature_id ~ time + modality, value.var = "adj.P.Val", fill = 1) %>% t
+
+
+data %>% 
+  ComplexHeatmap::Heatmap(na_col = "white",
+   # km = 3,
+    rect_gp = grid::gpar(col = "white", lwd = 0.5),
+  cluster_columns = T, 
+  cluster_rows = F,
+  show_row_dend = F,
+  show_column_dend = F,
+  show_row_names = T,
+   row_names_gp = grid::gpar(fontsize = 8),  
+   column_names_gp = grid::gpar(fontsize = 7),  
+   column_names_max_height = unit(12, "cm"),
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(data2[i, j] < 0.05) {
+        grid::grid.text("*", x, y)
+    }
+    },
+  col = circlize::colorRamp2(c(-2, 0, 2), c("dodgerblue4", "grey95","darkred")),
+  name = "log2FC"
+  )
+  
+
+```
+
+##C
+
+```{r}
+
+int <- decoupler_results %>% 
+  filter(statistic == "norm_wmean" & p_value < 0.05 & abs(score) > 1.7) %>% 
+  mutate(abs_score = abs(score)) %>% 
+  group_by(modality, condition) %>% 
+  slice_max(n=3, order_by = abs_score, with_ties = F) %>% 
+  mutate(source_dummy = paste0(modality, "_", source)) %>% 
+  ungroup() %>% 
+  distinct(source_dummy)
+
+decoupler_results %>%  
+  filter(statistic == "norm_wmean") %>% 
+   mutate(source_dummy = paste0(modality, "_", source)) %>% 
+  filter(source_dummy %in% int$source_dummy) %>% 
+  mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+    mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+    mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+    mutate(modality = ifelse(modality == "secretomics", "Secretome", modality)) %>% 
+  mutate(source = tolower(source)) %>% 
+  mutate(source = str_replace_all(source, "_", " ")) %>% 
+  mutate(time = factor(paste0("TGF_", condition), levels = names(pal_cond_time)))%>% 
+  ggplot(aes(x= score, y = reorder(source, -score), fill = time)) +
+  geom_vline(xintercept = 0) +
+  geom_point(shape =21, size = 3, colour = "grey") +
+  scale_fill_manual(values = pal_cond_time) +
+  facet_wrap(~modality, ncol = 2, scales = "free") +
+  theme(axis.text.y = element_text(size = 10), strip.background = element_blank()) +
+  labs(y = "", x = "pathway enrichment score")
+```
+
+
+##D
+
+
+
+```{r}
+hit_tfs <- res_kinase_enrichment$enrichment %>% 
+  filter(p_value < 0.03 & statistic == "norm_wmean" & abs(score) >1.7)
+
+m <- res_kinase_enrichment$enrichment %>%
+  filter(source %in% hit_tfs$source& statistic == "norm_wmean") %>% 
+  mutate(time = factor(time, levels=c("0.08h", "1h", "12h", "24h", "48h", "72h", "96h"))) %>% 
+  mutate(modality = "activity") %>% 
+  dcast(time + modality ~source, value.var = "score",fill = NaN)
+
+m_abun <- diff_results %>%  
+  filter(feature_id %in% colnames(m)) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h"))) %>%
+  dcast(time + modality ~ feature_id, value.var = "logFC", fill = NaN)
+
+m_comb <- bind_rows(m, m_abun) %>% 
+  filter(modality != "secretomics") %>% 
+  unite(id, c("time", "modality")) %>% 
+  #filter(!grepl("activity", id)) %>% 
+  column_to_rownames("id") %>% 
+  as.matrix()
+
+p_data <- res_kinase_enrichment$enrichment %>%
+  filter(p_value < 0.03 & statistic == "norm_wmean" & abs(score) >1.7) %>% 
+   mutate(modality = "activity") %>% 
+  acast(time + modality ~source, value.var = "p_value", fill = 1)
+
+p_data_comb <- res_kinase_enrichment$enrichment %>%
+  filter(p_value < 0.03 & statistic == "norm_wmean" & abs(score) > 1.7) %>%
+  mutate(modality = "activity") %>%
+  dcast(time + modality ~ source, value.var = "p_value", fill = 1) %>%
+  bind_rows(diff_results %>%
+    filter(feature_id %in% colnames(m)) %>%
+    dcast(time + modality ~ feature_id, value.var = "adj.P.Val", fill = 1)) %>%
+   filter(modality != "secretomics") %>% 
+  unite(id, c("time", "modality")) %>%
+  # filter(!grepl("activity", id)) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+p_data_comb[is.na(p_data_comb)] <- 1
+```
+
+```{r}
+order <- c(
+  "0.08h_activity", "1h_activity", "12h_activity", "24h_activity", "48h_activity", "72h_activity", "96h_activity",
+  "0.08h_proteomics", "1h_proteomics", "12h_proteomics", "24h_proteomics", "48h_proteomics", "72h_proteomics", "96h_proteomics",
+  "0.08h_rna", "1h_rna", "12h_rna", "24h_rna", "48h_rna", "72h_rna", "96h_rna"
+)
+
+m_comb <- m_comb[order,] 
+p_data_comb <- p_data_comb[order,] 
+
+set.seed(1)
+ht <- m_comb %>% 
+  ComplexHeatmap::Heatmap(
+    cluster_rows = F,
+    show_row_dend = F,
+    show_column_dend = F,
+    show_row_names = T,
+    column_names_gp = grid::gpar(fontsize = 7),
+    row_names_gp = grid::gpar(fontsize = 8),
+    rect_gp = grid::gpar(lwd = 2, col = "white"),  
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(p_data_comb[i, j] < 0.05) {
+        grid::grid.text("*", x, y)
+    }
+    },
+    col = circlize::colorRamp2(c(-1, 0, 1), c("dodgerblue4", "white", "darkred")),
+    name = "log2FC"
+  )
+ht <- ComplexHeatmap::draw(ht)
+ht
+tf_order<- colnames(m_comb)[ComplexHeatmap::column_order(ht)]
+```
+
+```{r}
+
+m_act <- m %>% 
+  unite(id, c("time", "modality")) %>% 
+  column_to_rownames("id") %>% 
+  as.matrix()
+
+m_act <- m_act[,tf_order] 
+p_data <- p_data[,tf_order] 
+
+set.seed(1)
+m_act %>% 
+  ComplexHeatmap::Heatmap(
+    cluster_rows = F,
+    cluster_columns = F,
+    show_row_dend = F,
+    show_column_dend = F,
+    show_row_names = T,
+    column_names_gp = grid::gpar(fontsize = 7),
+    row_names_gp = grid::gpar(fontsize = 8),
+    rect_gp = grid::gpar(lwd = 2, col = "white"),  
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(p_data[i, j] < 0.05) {
+        grid::grid.text("*", x, y)
+    }
+    },
+    col = circlize::colorRamp2(c(-3, 0, 3), c("dodgerblue4", "white", "darkred")),
+    name = "kinase_score"
+  )
+```
+
+
+
+## E
+
+```{r}
+
+kin <- "SMAD4"
+
+deg <- diff_results %>%
+  filter(modality == "rna") %>% # try with phospho as well
+  distinct(time, feature_id, t, logFC, P.Value, adj.P.Val) %>%
+  mutate(hit = ifelse(adj.P.Val < 0.05 &abs(logFC) > log(1.5), "hit", "no hit")) %>%
+  mutate(hit = ifelse(hit == "hit" & logFC < 0, "down", hit)) %>%
+  mutate(hit = ifelse(hit == "hit" & logFC > 0, "up", hit)) %>%
+  mutate(label = ifelse(hit != "no hit", feature_id, "")) %>%
+  mutate(time = factor(time, levels = c("0.08h", "1h", "12h","24h", "48h", "72h", "96h")))
+
+
+df <- res_tf_enrichment$net_dorothea %>%
+  filter(source == kin)
+
+
+deg %>%
+  filter(feature_id %in% df$target ) %>%
+  ggplot(aes(x = logFC, y = -log10(P.Value), colour = hit)) +
+  geom_point() +
+  geom_vline(xintercept = 0) +
+  geom_text_repel(aes(label = label), size =2) +
+  scale_colour_manual(values = c("up" = "indianred", "no hit" = "lightgrey","down" = "dodgerblue4")) +
+  facet_wrap(~time, nrow = 1)+
+  cowplot::panel_border() +
+  labs(x = "", subtitle = "SMAD4 target gene expression")
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

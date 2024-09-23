@@ -1,0 +1,251 @@
+---
+title: "Image analysis"
+output:
+  html_document:
+    keep_md: yes
+    toc: yes
+    theme: united
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# General settings
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  include = TRUE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  eval = TRUE,
+  fig.width = 4 * (1 + sqrt(5)) / 2, 
+  fig.height = 4,
+  dpi = 700
+)
+```
+
+## Packages
+
+```{r, message=F, warning =F, include=}
+library(tidyverse)
+library(ggplot2);theme_set(cowplot::theme_cowplot(font_size = 15) + theme(panel.grid.major = element_line(colour = "lightgrey", linewidth = 0.2), panel.grid.minor = element_line(colour = "lightgrey", linewidth = 0.2)))
+library("reshape2")
+library(ggrepel)
+library(knitr)
+library(Biostrings)
+library(RColorBrewer)
+library(org.Hs.eg.db)
+library(lme4)
+
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+
+tilted <-  theme(axis.text.x = element_text(angle = 45, hjust =1, vjust = 1))
+```
+
+# Initial ECM monitoring
+
+```{r}
+data <- read.csv(("data/NT22_004_Col1_20240127.csv"))
+```
+
+## LMM - discrete time
+- calculate mean of all images per sample
+- duplicate 0h ctrl for TGFb. There is no 0h treatment but we need it for the model.
+- square root transform data to stabilize the variance (decided based on residuals plots) (Piepho 2009)
+- remove unstained condition
+```{r}
+model_dat_n <- data %>%
+  mutate(wellID = paste(plate,well, sep = "_")) %>%
+  group_by(plate, time, condition, replicates) %>% 
+  summarize(mean_int = mean(Col1_per_cell)) %>% # calculate mean per sample (among 36 images)
+  mutate(sqrt_mean_int = sqrt(mean_int)) %>% # sqrt transform
+  #mutate(log_mean_int = log(mean_int)) %>%
+  ungroup() %>%
+  filter(condition != "unstained") # this was only needed for autofluorescence correction
+
+# Filter rows with time == 0h
+filtered_rows <- model_dat_n %>% filter(time == "0h")
+
+# Duplicate rows
+duplicated_rows <- filtered_rows %>% dplyr::slice(rep(1:n(), each = 1))
+
+# Rename condition to "TGF" in duplicated rows
+duplicated_rows$condition <- "TGF"
+
+# Combine the original and duplicated rows
+model_dat_discreteT_mean <- rbind(model_dat_n, duplicated_rows)
+```
+
+```{r linear mixed model discrete time}
+lme_model_discrete_mean <- lme4::lmer(formula = sqrt_mean_int ~ condition*time + (1|plate) , data = model_dat_discreteT_mean)
+
+summary(lme_model_discrete_mean)
+confint(lme_model_discrete_mean) # confidence intervals
+ranef(lme_model_discrete_mean) # to call random effects estimates
+```
+
+```{r}
+
+df <- lme4::fortify.merMod(lme_model_discrete_mean, data= lme4::getData(lme_model_discrete_mean)) %>% 
+  mutate(time = as.numeric(str_replace(time, "h", "")))
+
+df %>% 
+ ggplot(aes(time, sqrt_mean_int, colour = condition, fill = condition))+
+  #geom_boxplot() +
+  geom_point(aes(shape = plate), size = 3, alpha = 0.8) +
+  geom_smooth(method = "lm",se = T, width = 0.1) +
+  #ggpubr::stat_compare_means(method = "wilcox.test", label = "p.signif") +
+  scale_color_manual(values = c("grey90", "#FED395FF")) +
+  scale_fill_manual(values = c("grey90", "#FED395FF")) +
+  labs(y = "COLI - norm fluorescence intensity")
+```
+
+
+
+```{r}
+newdata <- data.frame(time= rep("0h",4),
+                      condition = rep("ctrl",4),
+                      plate = c("A","B","C","D"))
+
+norm_data <- newdata %>% 
+  mutate(norm_factor = predict(lme_model_discrete_mean, newdata=newdata)) %>% 
+  dplyr::select(plate, norm_factor)
+
+
+# plot
+data_norm_model <- model_dat_discreteT_mean %>% 
+  mutate(pred = predict(lme_model_discrete_mean)) %>% 
+  left_join(norm_data) %>% 
+  mutate(norm_sqrt_mean_int = sqrt_mean_int - norm_factor) %>% 
+  mutate(pred_norm = pred - norm_factor) %>% 
+  mutate(grouping = paste(plate,condition,sep="")) %>% 
+   mutate(time = as.numeric(str_replace(time, "h", "")))
+
+data_norm_model %>%
+  ggplot(aes(x=time, y= norm_sqrt_mean_int, col=condition, fill = condition, group = condition)) + 
+  geom_jitter(size = 3, alpha = 0.8, width = 0.8) +
+  geom_smooth(method = "lm",se = T, width = 0.1) +
+  #ggpubr::stat_compare_means(method = "wilcox.test", label = "p.signif") +
+  scale_color_manual(values = c("grey90", "#FEA873FF")) +
+  scale_fill_manual(values = c("grey90", "#FEA873FF")) +
+  labs(y = "COLI - norm fluorescence intensity")
+```
+
+
+```{r}
+imaging_data <- list(
+  "plot_data" = data_norm_model,
+  "model_data" = lme_model_discrete_mean
+)
+save(imaging_data, file = paste0("results/", Sys.Date(), "_imaging_data_fig1.RData"))
+```
+
+# Validations
+
+```{r}
+df_outliersEXnew <- read_csv("data/NT24_001_CNA35_20240224.csv")
+```
+ratio of TGF vs ctrl 
+ratio of ratio is the ratio of e.g. (siTranscriptionFactor TGF vs siTranscriptionFactor ctrl) vs (siNeg9 TGF vs siNeg9 ctrl)
+
+create df with intensity_norm_nuclei number values for each control
+```{r}
+control_df <- df_outliersEXnew %>%
+  filter(siRNA == "siNeg9" & condition == "ctrl") %>%
+  group_by(plate) %>%
+  summarise(ctrl_mean_intensity = mean(Col1_per_cell))
+
+df_test_TGF <- df_outliersEXnew %>%
+  #filter(condition == "TGF") %>%
+  left_join(control_df, by = c("plate")) %>%
+  mutate(FC_intensity = (Col1_per_cell - ctrl_mean_intensity) / ctrl_mean_intensity)
+
+```
+
+## ratio TGF
+```{r}
+# Calculate intercept for condition "TGF"
+intercept_TGF <- df_test_TGF %>%
+  filter(#plate %in% c("A","B","C"), 
+         siRNA == "siNeg9", condition == "TGF") %>%
+  summarise(median_TGF = median(FC_intensity)) %>%
+  pull(median_TGF)
+
+# Calculate intercept for condition "ctrl"
+intercept_ctrl <- df_test_TGF %>%
+  filter(#plate %in% c("A","B","C"),
+         siRNA == "siNeg9", condition == "ctrl") %>%
+  summarise(median_ctrl = median(FC_intensity)) %>%
+  pull(median_ctrl)
+```
+
+```{r}
+library(ggforce)
+df_test_TGF %>%
+  filter(
+    siRNA %in% c("siNeg9","siE2F1a", "siE2F1b", "siFLI1a", "siFLI1b","siSMAD1a", "siSMAD1b", "siNR4A1", "siHNF4G",  "siBHLHE40")
+    ) %>%
+  filter(!(condition == "ctrl" & siRNA != "siNeg9")) %>% 
+  mutate(siRNA = ifelse(siRNA == "siNeg9", paste(siRNA, condition), siRNA)) %>% 
+  mutate(siRNA = factor(siRNA, levels = c("siNeg9 ctrl", "siNeg9 TGF","siE2F1a", "siE2F1b", "siFLI1a", "siFLI1b","siSMAD1a", "siSMAD1b", "siNR4A1", "siHNF4G",  "siBHLHE40"))) %>% 
+  ggplot(aes(x = siRNA, y = FC_intensity)) +
+  geom_hline(yintercept = intercept_TGF, color = "gray26", linetype = 4, size = 1) +
+  geom_hline(yintercept = intercept_ctrl, color = "gray26", size = 1) +
+  geom_violin(fill = "white", colour = "mediumvioletred") +
+  geom_sina(aes(fill = siRNA), size = 3, alpha = 0.6, shape = 21, colour = "grey")+
+  stat_summary(geom = "crossbar", fun= median, color = "black", linewidth = 0.4)+
+  ggpubr::stat_compare_means(ref.group = "siNeg9 TGF", label = "..p.signif..", method = 't.test', hide.ns = T, size = 6, label.y = 7.7)+
+  scale_fill_manual(values = c("siNeg9" = "darkgrey",
+                                "siNR4A1" = "mediumvioletred", #424242
+                                "siHNF4G" = "mediumvioletred", #757575
+                                "siBHLHE40" ="mediumvioletred", #9E9E9E
+                                "siE2F1a" = "mediumvioletred",
+                                "siE2F1b" = "mediumvioletred",
+                                "siFLI1a" = "mediumvioletred",
+                                "siFLI1b" = "mediumvioletred",
+                                "siSMAD1a"= "mediumvioletred",
+                                "siSMAD1b" = "mediumvioletred")) +
+  #facet_wrap(~ condition)+
+  ylab("Col1/cell norm to siNeg9 ctrl")+
+  ylim(-1,8) +
+  #cowplot::panel_border()+
+  tilted
+```
+
+
+```{r}
+df_test_TGF %>%
+  mutate(siRNA = factor(siRNA, levels = c(
+   "siNeg9",  "siFN1", "siSMAD1a", "siSMAD1b", "siSMAD1c", "siNR4A1", "siHNF4G", "siBHLHE40", "siE2F1a", "siE2F1b", "siFLI1a", "siFLI1b", "siCOL1A175", "siCOL1A176", "siCOL1A177"))) %>% 
+  ggplot(aes(x = siRNA, y = FC_intensity)) +
+  geom_hline(yintercept = intercept_TGF, color = "gray26", linetype = 4, size = 1) +
+  geom_hline(yintercept = intercept_ctrl, color = "gray26", size = 1) +
+  ggforce::geom_sina(fill = "grey", size = 3, alpha = 0.6, shape = 21, colour = "grey")+
+  stat_summary(geom = "crossbar", fun= median, color = "black", linewidth = 0.4)+
+  ggpubr::stat_compare_means(ref.group = "siNeg9", label = "..p.signif..", method = 't.test', hide.ns = T, size = 6, label.y = 7.7)+
+  facet_wrap(~ condition)+
+  ylab("Col1/cell norm to siNeg9 ctrl")+
+  ylim(-1,8) +
+  cowplot::panel_border()+
+  tilted
+```
+
+
+# Save
+
+```{r}
+res_imaging_validations <- list("data" = df_test_TGF, "intercepts" = list("TGF" = intercept_TGF,"ctl" = intercept_ctrl))
+save(res_imaging_validations, file = paste0("results/", Sys.Date(), "_imaging_validations_finaldf.RData"))
+```
+
+
+
+
+
+
+

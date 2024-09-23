@@ -1,0 +1,403 @@
+---
+title: "Preprocessing and DE analysis"
+author: "Mira Burtscher, Martin Garrido-Rodriguez, Nadine Tuechler"
+output:
+  html_document:
+    keep_md: yes
+    toc: yes
+    theme: united
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# General settings
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  include = TRUE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  eval = TRUE,
+  fig.width = 4 * (1 + sqrt(5)) / 2, 
+  fig.height = 4,
+  dpi = 700
+)
+```
+
+## Packages
+
+```{r, message=F, warning =F, include=}
+library(tidyverse)
+library(ggplot2); theme_set(cowplot::theme_cowplot(font_size = 15))
+library("reshape2")
+library(ggrepel)
+library(knitr)
+library(Biostrings)
+library(RColorBrewer)
+library(here)
+library(org.Hs.eg.db)
+library(edgeR)
+```
+
+```{r}
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+filter <- dplyr::filter
+
+options(ggplot2.discrete.colour= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+options(ggplot2.discrete.fill= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+```
+
+
+# 1. Read in data
+
+These datasets can be downloaded in the realted PRIDE and GEo repositories
+
+```{r}
+# read count table and metadata
+rna_counts <- read.table(here("data/raw_data/transcriptomics/counts_correctedsamples.tsv"),
+    header = TRUE, row.names = 1)
+rna_metadata <- read.table(here("data/raw_data/transcriptomics/sample_table.tsv"),
+    header = TRUE) %>%
+  rownames_to_column(var = "matrix_id")
+rownames(rna_metadata) <- rna_metadata$matrix_id
+
+# match column order to metadata
+rna_counts <- rna_counts[, rna_metadata$matrix_id]
+
+# secretomics
+secretomics_df <- read_csv(here("data/raw_data/secretomics/Full_dataset_V1_FragPipe.csv"))
+
+# proteomics
+proteomics_data <- read_csv("data/raw_data/proteomics/Full_dataset_V4.csv")
+```
+
+# 2. Filtering, normalisation, imputation
+
+## Preprocess transcriptomic data
+
+1. Translate IDs
+2. Filter lowly expressed genes with edgeR `filterByExpr()` function
+3. Normalize using edgeR's TMM + CPM
+
+```{r preprocess transcriptomics}
+# translate ids
+#devtools::install_github("martingarridorc/biokit")
+translated_counts <- rna_counts %>%
+  as.matrix() %>%
+  biokit::translateMatrixWithDb(
+    ., db = org.Hs.eg.db, sourceKey = "ENSEMBL", 
+    targetKey = "SYMBOL", summariseFun = base::sum
+  )
+
+head(translated_counts)
+```
+
+remove outlier here! (Rep A 24h ctrl: "lane1ctrl24hA", due to experimental problems)
+```{r}
+# outlier removal
+translated_counts <- translated_counts[, colnames(translated_counts) != "lane1ctrl24hA"]
+rna_metadata <- rna_metadata[rownames(rna_metadata) != "lane1ctrl24hA", ]
+
+rna_metadata <- rna_metadata %>%
+  mutate(time = ifelse(time == "5min", "0.08h", time))
+```
+
+
+```{r preprocess transcriptomics}
+# filter low expressed genes
+design_matrix <- model.matrix( ~ condition + time, data = rna_metadata ) 
+dge <- edgeR::DGEList(translated_counts)
+keep <- edgeR::filterByExpr(y = dge, design = design_matrix)
+dge <- dge[keep, ]
+
+# normalized using TMM + CPM
+dge <- edgeR::calcNormFactors(dge)
+rna_norm_expr <- edgeR::cpm(dge, log = 1)
+```
+
+## Preprocess secretomics data
+
+Create metadata from column names
+
+```{r secretomics metadata}
+secretomics_df <- secretomics_df %>%
+  dplyr::select(Gene, starts_with(("channel_"))) %>%
+  column_to_rownames("Gene") %>%  
+  as.matrix()
+colnames(secretomics_df) <- str_replace(colnames(secretomics_df),"channel_", "")
+
+# removed albumin as it is a contaminant 
+secretomics_df <- secretomics_df[rownames(secretomics_df) != "ALB", ]
+
+secretomics_df[which(is.nan(secretomics_df))] <- NA
+
+secretomics_metadata <- data.frame(row.names = colnames(secretomics_df),
+                                   matrix_id = colnames(secretomics_df)) %>%
+  mutate(condition = case_when(str_detect(matrix_id, "TGFb") ~ "TGF",
+                               TRUE ~ "ctrl"),
+         time = str_extract(matrix_id, "[0-9]+h"),
+         replicate = case_when(str_detect(matrix_id, "rep1") ~ "A",
+                               str_detect(matrix_id, "rep2") ~ "B",
+                               str_detect(matrix_id, "rep3") ~ "C"))
+
+# report proportion of data points imputed
+prop <- round(sum(is.na(secretomics_df) / length(secretomics_df)), 2)
+print(paste0("Proportion of data points imputed: ", prop))
+
+# vsn normalization
+secretomics_norm <- secretomics_df %>% 
+  limma::normalizeVSN() %>%
+  # knn imputation
+  impute::impute.knn(.) %>%
+  .$data
+
+boxplot(secretomics_norm)
+
+no_batch_secretomics <- limma::removeBatchEffect(x = secretomics_norm, 
+                                                 batch = secretomics_metadata$replicate)
+
+boxplot(no_batch_secretomics)
+
+```
+
+## Preprocess proteomics data
+
+```{r new proteomics data}
+# proteomics matrix
+proteomics_df <- proteomics_data %>%
+  dplyr::filter(is.na(STY.79.9663)) %>%
+  dplyr::filter(sequence.id == Gene) %>%
+  dplyr::select(sequence.id, starts_with(("signal_sum_input_"))) %>% 
+  column_to_rownames("sequence.id") %>%  
+  as.matrix()
+colnames(proteomics_df) <- str_replace(colnames(proteomics_df),"signal_sum_input_", "")
+
+proteomics_df[which(is.nan(proteomics_df))] <- NA
+
+prop <- round(sum(is.na(proteomics_df) / length(proteomics_df)), 2)
+print(paste0("Proportion of data points imputed: ", prop))
+
+
+# vsn normalization
+proteomics_norm <- proteomics_df %>% 
+  limma::normalizeVSN() %>%
+  # knn imputation
+  impute::impute.knn(.) %>%
+  .$data
+
+proteomics_metadata <- 
+  data.frame(matrix_id = colnames(proteomics_df)) %>%
+    mutate(condition = case_when(str_detect(matrix_id, "TGFbeta") ~ "TGF",
+                                 TRUE ~ "ctrl"),
+           time = str_extract(matrix_id, "[0-9]+h|[0-9]+min"),
+           replicate = case_when(str_detect(matrix_id, "rep1") ~ "A",
+                                 str_detect(matrix_id, "rep2") ~ "B",
+                                 str_detect(matrix_id, "rep3") ~ "C",
+                                 str_detect(matrix_id, "rep4") ~ "D")) %>%
+    mutate(time = ifelse(time == "t0_min", "0h", time)) %>%
+    mutate(time = ifelse(is.na(time), "0h", time)) %>%
+    mutate(time = ifelse(time == "01h", "1h", time))%>%
+    mutate(time = ifelse(time == "5min", "0.08h", time))
+
+
+
+boxplot(log2(proteomics_df))
+boxplot(proteomics_norm)
+
+no_batch_proteomics <- limma::removeBatchEffect(x = proteomics_norm, 
+                                                 batch =proteomics_metadata$replicate)
+
+boxplot(no_batch_proteomics)
+```
+
+## Preprocess phosphoproteomics data
+
+```{r new proteomics data}
+# phospho matrix
+phospho_df <- proteomics_data %>%
+   dplyr::filter(!is.na(STY.79.9663)) %>%
+  dplyr::mutate(sequence.id = paste0(sequence.id, "_", phospho.position)) %>% 
+   dplyr::select(sequence.id, starts_with(("signal_sum_phospho_"))) %>%
+  column_to_rownames("sequence.id") %>% 
+  as.matrix()
+colnames(phospho_df) <- str_replace(colnames(phospho_df),"signal_sum_phospho_", "")
+
+# corrected phospho matrix
+phospho_df_input_norm <- proteomics_data %>%
+  dplyr::filter(!is.na(STY.79.9663)) %>%
+   dplyr::mutate(sequence.id = paste0(sequence.id, "_", phospho.position)) %>% 
+  dplyr::select(sequence.id,  starts_with(("signal_sum_input.norm.phospho_"))) %>%
+  column_to_rownames("sequence.id") %>%
+  as.matrix()
+colnames(phospho_df_input_norm) <- str_replace(colnames(phospho_df_input_norm),"signal_sum_input.norm.phospho_", "")
+
+
+phospho_mat_list <- list(phospho = phospho_df, input_norm_phospho = phospho_df_input_norm)
+
+# threshold for imputation
+minimum_pct <- 0.7
+imputed_phospho_mat_list <- lapply(phospho_mat_list, function(x) {
+  print(nrow(x))
+  
+  na_pct <- apply(x, 1, function(x) 1 - (sum(is.na(x)) / length(x) ))
+  keep <- na_pct >= minimum_pct
+  are_nas <- is.na(x[!keep,])
+  
+  print(paste0("Discarding ", sum(!keep) / length(keep)))
+  
+  print(paste0("NA proportion ", sum(are_nas) / length(x)))
+  x <- x[keep,]
+  
+  # norm
+  out_x <-  x %>%
+    limma::normalizeVSN() %>% 
+    # impute
+  impute::impute.knn(.) %>%
+  .$data
+  
+  return(out_x)
+
+})
+
+
+phospho_metadata_list <- lapply(imputed_phospho_mat_list, function(x) {
+  
+  data.frame(matrix_id = colnames(x)) %>%
+    mutate(condition = case_when(str_detect(matrix_id, "TGFbeta") ~ "TGF",
+                                 TRUE ~ "ctrl"),
+           time = str_extract(matrix_id, "[0-9]+h|[0-9]+min"),
+           replicate = case_when(str_detect(matrix_id, "rep1") ~ "A",
+                                 str_detect(matrix_id, "rep2") ~ "B",
+                                 str_detect(matrix_id, "rep3") ~ "C",
+                                 str_detect(matrix_id, "rep4") ~ "D")) %>%
+    mutate(time = ifelse(time == "t0_min", "0h", time)) %>%
+    mutate(time = ifelse(is.na(time), "0h", time)) %>%
+    mutate(time = ifelse(time == "01h", "1h", time))%>%
+    mutate(time = ifelse(time == "5min", "0.08h", time))
+
+})
+
+boxplot(imputed_phospho_mat_list$phospho)
+boxplot(imputed_phospho_mat_list$input_norm_phospho)
+
+imputed_phospho_mat_list$no_batch_phospho <- limma::removeBatchEffect(x = imputed_phospho_mat_list$phospho, 
+                                                 batch = phospho_metadata_list$phospho$replicate)
+
+imputed_phospho_mat_list$no_batch_input.norm.phos <- limma::removeBatchEffect(x = imputed_phospho_mat_list$input_norm_phospho, 
+                                                 batch = phospho_metadata_list$input_norm_phospho$replicate)
+
+boxplot(imputed_phospho_mat_list$no_batch_phospho)
+boxplot(imputed_phospho_mat_list$no_batch_input.norm.phos)
+
+```
+
+## Summarise Data
+
+```{r}
+# summarize data in a list
+data_list <- list(
+  rna = list(data_matrix = rna_norm_expr, metadata = rna_metadata), 
+  proteomics = list(data_matrix = no_batch_proteomics, metadata = proteomics_metadata), 
+  phospho = list(data_matrix = imputed_phospho_mat_list$no_batch_phospho, metadata = phospho_metadata_list$phospho), 
+  input_phospho = list(data_matrix = imputed_phospho_mat_list$no_batch_input.norm.phos, metadata = phospho_metadata_list$input_norm_phospho),
+  secretomics = list(data_matrix = no_batch_secretomics, metadata = secretomics_metadata))
+ 
+ 
+rm(list=setdiff(ls(), "data_list"))
+
+# restore env
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+filter <- dplyr::filter
+
+options(ggplot2.discrete.colour= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+options(ggplot2.discrete.fill= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+
+# fix metadata to matrix mapping
+data_list <- imap(data_list, function(x, data_mod) {
+  
+  message(data_mod)
+  out_list <- list()
+  out_list$metadata <- x$metadata
+  out_list$data_matrix <- x$data_matrix[, x$metadata$matrix_id]# error here, does this element exist in my data?
+  return(out_list)
+   
+})
+
+# save intermediate data
+saveRDS(data_list, here(paste0("data/processed_data/", Sys.Date(), "_processed_data.rds")))
+```
+
+# 3. Differential expression analysis
+
+```{r differential analysis with limma}
+# iterate over data list
+diff_results <- imap(data_list, function(modality_data, modality) {
+  
+  message(paste0("Processing: ", modality))
+  
+  data_matrix <- modality_data$data_matrix
+  metadata <- modality_data$metadata
+  
+  # define diff information
+  diff_df <- metadata %>%
+    as.data.frame() %>%
+    dplyr::filter(time != "0h") %>%
+    mutate(group = paste0(condition, "_", time))
+  rownames(diff_df) <- diff_df$matrix_id
+  
+  # define limma design matrix
+  # if secretomics, include replicate in the design matrix
+  if(modality == "secretomics") {
+    
+    design_matrix <- diff_df %>%
+      model.matrix(~ 0 + group + replicate, data = .)
+    
+  } else {
+    
+    design_matrix <- diff_df %>%
+      model.matrix(~ 0 + group , data = .)
+    
+  }
+  
+  # define contrasts
+  contrasts <- sapply(unique(diff_df$time), function(x) paste0("groupTGF_", x, "-groupctrl_", x))
+  contrast_matrix <- limma::makeContrasts(contrasts = contrasts, levels = design_matrix)
+  
+  # apply limma
+  fit <- limma::lmFit(data_matrix[, rownames(design_matrix)], design = design_matrix) %>%
+    limma::contrasts.fit(., contrasts = contrast_matrix) %>%
+    limma::eBayes(.)
+  
+  # get diff df
+  diff_table <- lapply(contrasts, function(x) limma::topTable(fit, coef = x, number = Inf) %>%
+                         mutate(comparison = x) %>%
+                         rownames_to_column(var = "feature_id")) %>%
+    bind_rows()
+  
+  return(diff_table)
+  
+}) %>%
+  bind_rows(.id = "modality") %>%
+  mutate(time = str_extract(comparison, "[0-9]+h|[0-9]+min|[0-9]+\\.[0-9]+h")) %>%
+  mutate(time = factor(time, levels = c("0.08h", "1h", "12h","24h", "48h", "72h", "96h"))) # changed from 5min to 0.08h
+
+#write_tsv(diff_results, here("data/processed_data/diff_results.tsv"))
+# 27/02/24: exactly same as diff_results_20230322.tsv
+```
+
+# 4. Save
+
+```{r, eval =F}
+save(data_list, file = paste0("data/", Sys.Date(), "_data_list.RData"))
+save(diff_results, file = paste0("data/", Sys.Date(), "_diff_results.RData"))
+```
+
+

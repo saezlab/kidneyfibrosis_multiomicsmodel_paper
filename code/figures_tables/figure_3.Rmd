@@ -1,0 +1,614 @@
+---
+title: "Figure 3 code"
+output:
+  html_document:
+    keep_md: yes
+    toc: yes
+    theme: united
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# General settings
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  include = TRUE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  eval = TRUE,
+  fig.width = 4 * (1 + sqrt(5)) / 2, 
+  fig.height = 4,
+  dpi = 700
+)
+knitr::opts_knit$set(root.dir = "~/Documents/01_repos/kidney_fibrosis/")
+```
+
+## Packages
+
+```{r, message=F, warning =F, include=}
+library(tidyverse)
+library(ggplot2);theme_set(cowplot::theme_cowplot(font_size = 15) + theme(panel.grid.major = element_line(colour = "lightgrey", linewidth = 0.2), panel.grid.minor = element_line(colour = "lightgrey", linewidth = 0.2)))
+library("reshape2")
+library(ggrepel)
+library(knitr)
+library(Biostrings)
+library(RColorBrewer)
+library(visNetwork)
+
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+```
+
+```{r}
+options(ggplot2.discrete.colour= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+options(ggplot2.discrete.fill= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+tilted <-  theme(axis.text.x = element_text(angle = 45, hjust =1, vjust = 1))
+
+pal_condition = c(
+  "TGF" = "#FEA873FF",
+  "control" = "grey")
+
+pal_cond_time <- c(
+  "ctrl_0h" = "#F0F0F0",
+  "ctrl_0.08h" = "#D9D9D9",
+  "ctrl_1h" = "#BDBDBD",
+  "ctrl_12h" = "#969696",
+  "ctrl_24h" = "#737373",
+  "ctrl_48h" = "#525252",
+  "ctrl_72h" = "#252525",
+  "ctrl_96h" = "#000000",
+  "TGF_0h" = "#FCFDBFFF",
+  "TGF_0.08h" =  "#FED395FF",
+  "TGF_1h" = "#FEA873FF",
+  "TGF_12h" = "#F97C5DFF",
+  "TGF_24h" = "#E95562FF",
+  "TGF_48h" = "#C83E73FF" ,
+  "TGF_72h" = "#A3307EFF",
+  "TGF_96h" =   "#7D2482FF"
+)
+
+pal_omics <-
+  c(
+    "Transcriptome" = "mediumvioletred",
+    "Proteome"= "darkslategrey",
+    "Phosphoproteome" ="darkcyan", 
+    "Secretome" = "darkseagreen3"
+  )
+
+
+pal_direction <-
+  c(
+    "down" = "dodgerblue4",
+    "no direction" = "grey90",
+    "up" = "indianred3"
+  )
+
+pal_nodes <- c("TF" = "mediumvioletred", "Kinase/\nphosphatase" = "darkcyan", "Secreted proteins" = "darkseagreen3", "PKN" = "grey")
+
+```
+
+```{r}
+secreted_proteins <- msigdbr::msigdbr(species = "Homo sapiens") %>% 
+  filter(gs_id %in% c('M5889', 'M5885'))
+
+
+myo_genes <- openxlsx::read.xlsx("data/41586_2020_2941_MOESM4_ESM.xlsx", sheet = "Human_PDGFRBplus_Level2_Specifi") %>% 
+  separate(`X1`, into = c("ensembl", "Gene"), remove = T, sep = ";") %>% 
+  separate(Gene, into = c("Gene", "iso"), sep = "\\.", remove = F) %>% 
+  group_by(Gene) %>% 
+  summarise_all(.funs = mean) %>%  select(Gene, Myofibroblasts) %>% 
+  filter(Myofibroblasts > 0.2)
+
+load("data/processed_data/2024-07-24_data_list.RData")
+load("data/processed_data/2024-07-24_diff_results.RData")
+load("results/2024-07-24_tf_enrichment_results.RData")
+load("results/2024-07-24_kinase_enrichment_result.RData")
+load("network_data/2024-06-27/networkinput_object.RData")
+load("results/2024-08-16_res_network.RData")
+```
+
+
+
+# A
+
+Nadine
+
+# B
+
+```{r}
+res_network$node_df %>% 
+  filter(network == "late" & !grepl("_", node)) %>% 
+  distinct(node, type) %>% 
+  dplyr::rename(source = node) %>% 
+  mutate(data = "modelled in\nnetwork") %>% 
+  bind_rows(
+    res_network_inputs$enzymes_df_late%>% 
+    mutate(type = ifelse(source %in% res_tf_enrichment$net_dorothea$source, "TF", "Kinase/\nphosphatase")) %>% 
+      bind_rows(
+        res_network_inputs$secretome_df_late %>%  mutate(type = "Secreted proteins")
+        ) %>% 
+    mutate(type =factor(type, levels = c( "Kinase/\nphosphatase", "TF", "Secreted proteins"))) %>% 
+    mutate(data = "input")
+  ) %>% 
+  ggplot(aes(x = type, pattern = data, fill = type)) +
+  ggpattern::geom_bar_pattern(pos = "dodge", pattern_colour = "white", pattern_fill = "white", colour = "white")  +
+  scale_fill_manual(values = pal_nodes) +
+  ggpattern::scale_pattern_manual(values = c("none", "stripe")) +
+  labs(y= "# included in model", x='') +
+  guides(fill="none") +
+  lims(y=c(0,80)) +
+  coord_flip()
+
+res_network$node_df %>% 
+  filter(network == "early" & !grepl("_", node)) %>% 
+  distinct(node, type) %>% 
+  dplyr::rename(source = node) %>% 
+  mutate(data = "modelled in\nnetwork") %>% 
+  bind_rows(
+    res_network_inputs$enzymes_df_early%>% 
+  mutate(type = ifelse(source %in% res_tf_enrichment$net_dorothea$source, "TF", "Kinase/\nphosphatase")) %>% 
+  bind_rows(res_network_inputs$secretome_df_early %>%  mutate(type = "Secreted proteins")) %>% 
+  mutate(type =factor(type, levels = c( "Kinase/\nphosphatase", "TF", "Secreted proteins"))) %>% 
+    mutate(data = "input")
+  ) %>% 
+  ggplot(aes(x = type, pattern = data, fill = type)) +
+  ggpattern::geom_bar_pattern(pos = "dodge", pattern_colour = "white", pattern_fill = "white", colour = "white")  +
+  scale_fill_manual(values = pal_nodes) +
+  ggpattern::scale_pattern_manual(values = c("none", "stripe")) +
+  labs(y= "# included in model", x='') +
+  guides(fill="none") +
+  lims(y=c(0,80)) +
+   coord_flip()
+```
+
+# C
+
+```{r, fig.width=12}
+interesting <- c(
+"Degradation of the extracellular matrix",
+"Extracellular matrix organization",
+"Collagen formation",
+"Signaling by TGFB family members",
+"FOXO-mediated transcription",
+"Nuclear Events (kinase and transcription factor activation)",
+"Transcriptional regulation by RUNX2"
+)
+
+res_network$pathway_enrichment  %>% 
+  filter(Description %in% interesting) %>% 
+  mutate(significance = ifelse(qvalue <= 0.01, "q-value < 0 .01", "q-value > 0.01")) %>% 
+  mutate(Description = factor(Description, levels = interesting)) %>% 
+  ggplot(aes(x = log2(LR), y = Description, fill = network, size = Count, shape = significance)) +
+  geom_line(aes(group = Description), colour = "black", size =0.5, linetype = 3) +
+  geom_point(colour = "black") +
+  scale_fill_manual(values = c("#FEA873FF", "#7D2482FF")) +
+  scale_size(range = c(3, 6)) +
+  scale_shape_manual(values = c(21, 24)) +
+  labs(x = "log2 odds-ratio", y = "")
+
+```
+
+# D
+
+```{r}
+res_network$node_conn_early%>% 
+  mutate(network = "early") %>% 
+  filter(degree < 0.003) %>% 
+  bind_rows(res_network$node_conn_late %>%  mutate(network = "late")) %>% 
+  inner_join(res_network$node_df %>% ungroup() %>%   distinct(node, type) %>%  distinct(node, .keep_all = T), by = c("Node" ="node")) %>% 
+  group_by(network) %>% 
+  mutate(rank = scale(degree)) %>% 
+  dcast(Node +type ~ network, fill = 0, value.var = "degree") %>% 
+  mutate(type = factor(type, levels = rev(names(pal_nodes)))) %>% 
+  arrange(type) %>% 
+  ggplot(aes(x = early, y = late, fill = type)) +
+  geom_abline(slope = 1, colour = "grey") +
+  ggrepel::geom_text_repel(aes(label = Node, colour = type), size = 2, max.overlaps = 20, fill = "white", colour = "black") +
+  geom_point(size = 3, alpha = 1, shape = 21, colour = "darkgrey") +
+  scale_fill_manual(values = pal_nodes) +
+ # lims(x = c(0, 0.0025), y = c(0, 0.0018)) +
+  labs(x = "closeness centrality early TGF response", y = "closeness centrality late TGF response")
+```
+
+
+# E
+
+```{r}
+edges <- res_network$combined_edges_df %>% 
+  filter(network == "early") %>% 
+  select(from = source, to = target) %>% 
+  filter(from == "RELA" ) %>% 
+  distinct(from, to)
+
+
+edges <- res_network$combined_edges_df %>% 
+  filter(network == "early") %>% 
+  select(from = source, to = target) %>% 
+  filter(from %in% edges$to | to %in% edges$to | (from == "RPS6KA1" & to == "NR4A1") | (from == "MAPK1" & to == "RPS6KA1")) %>% 
+  distinct(from, to)
+
+nodes <- res_network$node_df %>% 
+  filter(node %in% c(edges$from, edges$to) & !(grepl("_", node))) %>% 
+  mutate(id = node) %>% 
+  mutate(group = type) %>% 
+  distinct(group, id, type) %>% 
+  distinct(id, .keep_all = T)
+
+
+set.seed(4)
+p <- visNetwork(nodes, edges) %>%
+  # standard options
+  visGroups(groupname = "Kinase/\nphosphatase", color = "darkcyan") %>%
+  visGroups(groupname = "TF", color = "mediumvioletred") %>%
+  visGroups(groupname = "PKN", color = "gray") %>%
+  visGroups(groupname = "Secreted proteins", color = "#8FBC8F") %>%
+  visEdges(arrows = "to", color = "dimgrey", width = 2) %>%
+  visNodes(font = "30px arial black bold") %>%
+  visLegend() %>%
+  visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+  visNetwork::visIgraphLayout(layout = "layout_with_fr")
+p
+```
+
+# F
+
+```{r, fig.height=8}
+int <- c("BHLHE40","NR4A1", "SMAD1", "FLI1", "HNF4G", "E2F1")
+#int <- c("TNC", "POSTN", "FN1")
+#int <- c("SP1")
+
+df <- diff_results %>%
+  filter(feature_id %in% int) %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+  mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+  mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+  mutate(modality = ifelse(modality == "secretomics", "Secretome", modality)) %>% 
+  select(time, logFC, modality, feature_id) %>% 
+  bind_rows(
+     res_tf_enrichment$enrichment %>% 
+   filter(source %in% int ) %>%
+   mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  select(feature_id = source, time, logFC = score) %>% 
+  mutate(modality = "activity")
+  )
+
+dummy_df <- data.frame(
+  modality = c(unique(df$modality)),
+  time = 0,
+  logFC = 0
+)
+
+
+abundance_df <- df %>%
+  bind_rows(dummy_df) %>%
+  ungroup() %>%
+  tidyr::complete(time, modality, feature_id, fill = list(logFC = 0)) %>%
+  filter(!is.na(feature_id))
+
+abundance_df %>% 
+  mutate(data = ifelse(modality == "activity", "activity", "abundnace")) %>% 
+  mutate(feature_id = factor(feature_id, levels = int)) %>% 
+  group_by(feature_id, modality) %>% 
+  mutate(sum = sum(abs(logFC))) %>% 
+  filter(sum > 0) %>% 
+  ggplot(aes(x = time, y = logFC, group = modality, colour = modality, linetype = data)) +
+  geom_hline(yintercept = 0) +
+  geom_point(size = 2) +
+  #geom_line() +
+  geom_smooth(method = loess,method.args = list(span = 0.35, degree = 1),linewidth = 1, se = F) +
+  scale_colour_manual(values = c("mediumvioletred", "darkslategrey", "mediumvioletred")) +
+  scale_linetype_manual(values = c(3, 1)) +
+  facet_wrap(~feature_id, scales = "free_y", nrow =1) +
+  cowplot::panel_border() +
+  labs(y = "log2 fold-change | score", x = "treatment duration [h]")
+
+```
+
+```{r}
+int <- c("SMAD3","PAX8")
+#int <- c("TNC", "POSTN", "FN1")
+int <- c("RELA")
+
+df <- diff_results %>%
+  filter(feature_id %in% int) %>%
+  mutate(time = as.numeric(str_remove(time, "h"))) %>%
+  mutate(modality = ifelse(modality == "rna", "Transcriptome", modality)) %>%
+  mutate(modality = ifelse(modality == "input_phospho", "Phosphoproteome", modality)) %>%
+  mutate(modality = ifelse(modality == "proteomics", "Proteome", modality)) %>%
+  mutate(modality = ifelse(modality == "secretomics", "Secretome", modality)) %>% 
+  select(time, logFC, modality, feature_id) %>% 
+  bind_rows(
+     res_tf_enrichment$enrichment %>% 
+   filter(source %in% int & statistic == "mlm") %>%
+   mutate(time = as.numeric(str_remove(time, "h"))) %>% 
+  select(feature_id = source, time, logFC = score) %>% 
+  mutate(modality = "activity")
+  )
+
+dummy_df <- data.frame(
+  modality = c(unique(df$modality)),
+  time = 0,
+  logFC = 0
+)
+
+
+abundance_df <- df %>%
+  bind_rows(dummy_df) %>%
+  ungroup() %>%
+  tidyr::complete(time, modality, feature_id, fill = list(logFC = 0)) %>%
+  filter(!is.na(feature_id))
+
+abundance_df %>% 
+  mutate(data = ifelse(modality == "activity", "activity", "abundnace")) %>% 
+  mutate(feature_id = factor(feature_id, levels = int)) %>% 
+  ggplot(aes(x = time, y = logFC, group = modality, colour = modality, linetype = data)) +
+  geom_hline(yintercept = 0) +
+  geom_point(size = 2) +
+  #geom_line() +
+  geom_smooth(method = loess,method.args = list(span = 0.35, degree = 1),linewidth = 1, se = F) +
+  #scale_colour_manual(values = c("mediumvioletred", "darkslategrey", "mediumvioletred")) +
+  scale_linetype_manual(values = c(3, 1)) +
+  facet_wrap(~feature_id, scales = "free_y", ncol =1) +
+  cowplot::panel_border() +
+  labs(y = "log2 fold-change | score", x = "time [h]")
+
+```
+
+
+
+
+# G
+
+```{r}
+
+kin <- "NR4A1"
+
+deg <- diff_results %>%
+  filter(modality == "rna") %>% # try with phospho as well
+  distinct(time, feature_id, t, logFC, P.Value, adj.P.Val) %>%
+  mutate(hit = ifelse(adj.P.Val < 0.05 &abs(logFC) > log(1.5), "hit", "no hit")) %>%
+  mutate(hit = ifelse(hit == "hit" & logFC < 0, "down", hit)) %>%
+  mutate(hit = ifelse(hit == "hit" & logFC > 0, "up", hit)) %>%
+  mutate(label = ifelse(hit != "no hit", feature_id, "")) %>%
+  mutate(time = factor(time, levels = c("0.08h", "1h", "12h","24h", "48h", "72h", "96h")))
+
+
+df <- res_tf_enrichment$net_dorothea %>%
+  filter(source == kin)
+
+
+pMAP2K1 <- deg %>%
+  filter(feature_id %in% df$target ) %>%
+  filter(time == "1h") %>% 
+  ggplot(aes(x = logFC, y = -log10(P.Value), colour = hit)) +
+  geom_point(size=2) +
+  geom_vline(xintercept = 0) +
+  geom_text_repel(aes(label = label), size =3) +
+  scale_colour_manual(values = c("up" = "indianred", "no hit" = "lightgrey","down" = "dodgerblue4")) +
+  facet_wrap(~time, nrow = 2)+
+  labs(x = "log2 fold-change\nTGF-ctl")
+pMAP2K1
+
+```
+
+
+
+
+# Supplements
+
+
+## A 
+
+```{r}
+res_network_inputs$pkn_df_early %>% 
+  mutate(network = "early") %>% 
+  left_join(res_network$enzymes %>% filter(network == "early") %>%   select(network, source, type), by = c("source", "network")) %>% 
+  left_join(res_network$enzymes %>% filter(network == "early") %>%   select(network, source, type), by = c("target"= "source", "network"), suffix = c("_source", "_target")) %>% 
+  bind_rows(
+    res_network_inputs$pkn_df_late %>%  mutate(network = "late") %>% 
+      left_join(res_network$enzymes  %>% filter(network == "late")%>%  select(network, source, type), by = c("source", "network")) %>% 
+  left_join(res_network$enzymes  %>% filter(network == "late")%>%  select(network, source, type), by = c("target"= "source", "network"), suffix = c("_source", "_target"))
+  ) %>% 
+  select(network, type_source, type_target) %>% 
+   mutate(type_source = ifelse(is.na(type_source), "PKN", type_source)) %>% 
+  mutate(type_target = ifelse(is.na(type_target), "PKN", type_target)) %>% 
+   melt(id.vars = c("network")) %>% 
+  mutate(value = factor(value, levels = names(pal_nodes))) %>% 
+  ggplot(aes(x = variable, fill = value)) +
+  geom_bar() +
+  scale_fill_manual(values = pal_nodes) +
+   facet_wrap(~network) +
+  tilted +
+  labs(y= "# included in PKN", x='') 
+```
+
+
+## B
+
+```{r}
+res_network$combined_edges_df %>% 
+  left_join(res_network$enzymes %>%  select(network, source, type), by = c("source", "network")) %>% 
+  left_join(res_network$enzymes %>%  select(network, source, type), by = c("target"= "source", "network"), suffix = c("_source", "_target")) %>% 
+  filter(!grepl("_", source)& !grepl("_", target)) %>%
+  distinct(network, edge,source,  sign,  target , type_source, type_target ) %>% 
+  select(network, type_source, type_target) %>% 
+  melt(id.vars = c("network")) %>% 
+  mutate(value = ifelse(is.na(value), "PKN", value)) %>% 
+  mutate(value = factor(value, levels = names(pal_nodes))) %>% 
+  ggplot(aes(x = variable,fill = value)) +
+  geom_bar() +
+  scale_fill_manual(values = pal_nodes) +
+  scale_pattern_manual(values = c("none", "stripe")) +
+  labs(y= "# included in model", x='') +
+   lims(y=c(0,210)) +
+  facet_wrap(~network) +
+  tilted
+```
+
+## C
+
+```{r, fig.height=10, fig.width=14}
+interesting <- res_network$pathway_enrichment  %>% 
+  filter(qvalue <= 0.01 & Count > 10) %>% 
+  filter(!(grepl("TLR", Description)))
+
+res_network$pathway_enrichment  %>% 
+  filter(Description %in% interesting$Description) %>% 
+  mutate(significance = ifelse(qvalue <= 0.01, "q-value < 0 .01", "q-value > 0.01")) %>% 
+  ggplot(aes(x = log2(LR), y = reorder(Description, LR), fill = network, size = Count, shape = significance)) +
+  geom_line(aes(group = Description), colour = "black", size =0.5, linetype = 3) +
+  geom_point(colour = "black") +
+  scale_fill_manual(values = c("#FEA873FF", "#7D2482FF")) +
+  scale_size(range = c(3, 6)) +
+  scale_shape_manual(values = c(21, 24)) +
+  labs(x = "log2 odds-ratio", y = "")
+```
+
+## D
+
+```{r}
+int <- res_network$pathway_enrichment  %>% 
+  ungroup() %>% 
+  filter(Description == "Extracellular matrix organization") %>% 
+  mutate(members = str_split(geneID, "/")) %>% 
+  unnest() %>% 
+  distinct(members)
+
+
+edges <- res_network$combined_edges_df %>% 
+  select(from = source, to = target) %>% 
+  filter(from %in% int$members | to %in% int$members) %>% 
+  distinct(from, to)
+
+nodes <- res_network$node_df %>% 
+  filter(node %in% c(edges$from, edges$to) & !(grepl("_", node))) %>% 
+  mutate(id = node) %>% 
+  mutate(group = type) %>% 
+  distinct(group, id, type) %>% 
+  distinct(id, .keep_all = T)
+
+
+set.seed(1)
+p <- visNetwork(nodes, edges) %>%
+  # standard options
+  visGroups(groupname = "Kinase/\nphosphatase", color = "darkcyan") %>%
+  visGroups(groupname = "TF", color = "mediumvioletred") %>%
+  visGroups(groupname = "PKN", color = "gray") %>%
+  visGroups(groupname = "Secreted proteins", color = "#8FBC8F") %>%
+  visEdges(arrows = "to", color = "dimgrey", width = 2) %>%
+  visNodes(font = "30px arial black bold") %>%
+  visLegend() %>%
+  visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>% 
+  visNetwork::visIgraphLayout(layout = "layout_with_fr")
+p
+
+```
+
+## E
+
+```{r}
+int <- res_network$pathway_enrichment  %>% 
+  ungroup() %>% 
+  filter(Description == "Extracellular matrix organization") %>% 
+  mutate(members = str_split(geneID, "/")) %>% 
+  unnest() %>% 
+  distinct(members)
+
+data <- diff_results %>% 
+  filter(modality != "phospho" & modality != "input_phospho") %>% 
+  filter(feature_id %in% int$members) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h")),
+          hit = ifelse(adj.P.Val < 0.05 & abs(logFC) > log2(1.5), "hit", "no hit")) %>%
+  #filter(hit == "hit") %>% 
+  acast(feature_id ~ time + modality, value.var = "logFC", fill = NaN)
+
+data2 <- diff_results %>% 
+  filter(modality != "phospho" & modality != "input_phospho") %>% 
+  filter(feature_id %in% int$members) %>% 
+  mutate(time = factor(time, levels = c("0h", "0.08h", "1h", "12h","24h", "48h", "72h", "96h")),
+          hit = ifelse(adj.P.Val < 0.05 & abs(logFC) > log2(1.5), "hit", "no hit")) %>%
+  filter(hit == "hit") %>% 
+  acast(feature_id ~ time + modality, value.var = "adj.P.Val", fill = 1)
+
+
+col_order <- c(
+  "12h_secretomics", "24h_secretomics", "48h_secretomics", "72h_secretomics", "96h_secretomics",
+  "12h_proteomics", "24h_proteomics", "48h_proteomics", "72h_proteomics", "96h_proteomics",
+  "1h_rna", "12h_rna", "24h_rna", "48h_rna", "72h_rna", "96h_rna"
+  )
+
+data <- data[,col_order]  %>% t
+
+data2<- data2[,col_order] %>% t
+
+data %>% 
+  ComplexHeatmap::Heatmap(na_col = "white",
+   # km = 3,
+    rect_gp = grid::gpar(col = "white", lwd = 0.6),
+   cluster_rows=F,
+  cluster_columns = T, 
+  show_row_dend = F,
+  show_column_dend = F,
+  show_row_names = T,
+   row_names_gp = grid::gpar(fontsize = 8),  
+   column_names_gp = grid::gpar(fontsize = 7),  
+  cell_fun = function(j, i, x, y, w, h, fill) {
+    if(data2[i, j] < 0.05) {
+        grid::grid.text("*", x, y)
+    }
+    },
+  col = circlize::colorRamp2(c(-3, 0, 3), c("dodgerblue4", "grey95","darkred")),
+  name = "log2FC"
+  )
+  
+```
+
+## F
+
+```{r}
+res_network$node_conn_early %>% 
+  inner_join(res_network$node_df %>%  filter(network == "early") %>%  distinct(node, type), by = c("Node" ="node")) %>% 
+  filter(degree < 0.1) %>% 
+  ggplot(aes(x = type, y = degree, colour = type)) +
+  geom_violin() +
+  stat_summary(fun = median, geom = "crossbar") +
+  ggforce::geom_sina(size =3, alpha = 0.3) +
+  ggrepel::geom_text_repel(aes(label = Node), colour = "black", size = 2) +
+  scale_color_manual(values = pal_nodes)
+
+res_network$node_conn_late %>% 
+  inner_join(res_network$node_df %>%  filter(network == "late") %>%  distinct(node, type), by = c("Node" ="node")) %>% 
+  ggplot(aes(x = type, y = degree, colour = type)) +
+  geom_violin() +
+  stat_summary(fun = median, geom = "crossbar") +
+  ggforce::geom_sina(size =3, alpha = 0.3) +
+  ggrepel::geom_text_repel(aes(label = Node), colour = "black", size = 2) +
+  scale_color_manual(values = pal_nodes)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

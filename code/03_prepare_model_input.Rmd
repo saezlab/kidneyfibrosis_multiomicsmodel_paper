@@ -1,0 +1,475 @@
+---
+title: "preps to run corneto"
+output:
+  html_document:
+    keep_md: yes
+    toc: yes
+    theme: united
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# General settings
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  include = TRUE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  eval = TRUE,
+  fig.width = 4 * (1 + sqrt(5)) / 2,
+  fig.height = 4,
+  dpi = 700
+)
+knitr::opts_knit$set(root.dir = "/Users/burtsche/Documents/01_repos/kidney_fibrosis//")
+```
+
+## Packages
+
+```{r, message=F, warning =F, include=}
+library(tidyverse)
+library(ggplot2)
+library("reshape2")
+library(ggrepel)
+library(knitr)
+library(Biostrings)
+library(RColorBrewer)
+library(org.Hs.eg.db)
+library(OmnipathR)
+library(igraph)
+
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+```
+
+```{r}
+options(ggplot2.discrete.colour = c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+options(ggplot2.discrete.fill = c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+```
+
+# COSMOS functions
+
+```{r}
+downstream_neighbours <- function(meta_network, n_steps, input_names) {
+  meta_g <- graph_from_data_frame(data.frame(s = meta_network$source, t = meta_network$target))
+
+  dn_nbours <- ego(graph = meta_g, order = n_steps, nodes = input_names, mode = "out")
+
+  sub_nodes <- c(unique(names(unlist(dn_nbours))), input_names)
+
+  meta_network <- meta_network[meta_network$source %in% sub_nodes & meta_network$target %in% sub_nodes, ]
+
+  return(meta_network)
+}
+
+
+downstream_neighbours2 <- function(meta_network, n_steps, input_names) {
+  meta_g <- igraph::graph_from_data_frame(data.frame(s = meta_network$source, t = meta_network$target, i = meta_network$mor), directed = TRUE)
+
+  up_nbours <- igraph::ego(graph = meta_g, order = n_steps, nodes = input_names, mode = "in")
+
+  sub_nodes <- c(unique(names(unlist(up_nbours))), input_names)
+
+  meta_network <- meta_network[meta_network$source %in% sub_nodes & meta_network$target %in% sub_nodes, ]
+
+  return(meta_network)
+}
+
+
+
+filter_TF_sign <- function(network, gene_expression_binarized, signaling_data, tf_regulon) {
+  gene_exp_df <- data.frame(
+    gene = gene_expression_binarized$gene,
+    target_sign = gene_expression_binarized$signFC
+  )
+
+  signaling_df <- data.frame(
+    TF = signaling_data$source,
+    TF_sign = sign(signaling_data$score)
+  ) %>%
+    dplyr::filter(.data$TF %in% tf_regulon$tf)
+
+  annotated_network <- network %>%
+    dplyr::left_join(
+      gene_exp_df,
+      by = c(target = "gene")
+    ) %>%
+    dplyr::left_join(
+      signaling_df,
+      by = c(source = "TF")
+    ) %>%
+    dplyr::mutate(source_is_TF = .data$source %in% tf_regulon$tf)
+
+  annotated_network <- annotated_network %>%
+    dplyr::mutate(target_gene_unchanged = .data$target_sign == 0) %>%
+    dplyr::mutate(TF_target_unchanged = .data$source_is_TF & (.data$target_gene_unchanged | is.na(.data$target_gene_unchanged))) %>%
+    dplyr::mutate(inconsistent_TF_gene_sign = sign(.data$TF_sign) != interaction * sign(.data$target_sign))
+
+  removed_interactions <- annotated_network %>%
+    dplyr::filter(.data$TF_target_unchanged | .data$inconsistent_TF_gene_sign)
+
+  kept_interactions <- annotated_network %>%
+    dplyr::filter(!.data$TF_target_unchanged | is.na(.data$TF_target_unchanged)) %>%
+    dplyr::filter(!.data$inconsistent_TF_gene_sign | is.na(.data$inconsistent_TF_gene_sign))
+
+  out_pkn <- kept_interactions %>%
+    dplyr::select(
+      .data$source,
+      .data$interaction, .data$target
+    )
+
+  return(out_pkn)
+}
+```
+
+
+#1. Load data
+
+```{r}
+load("results/2024-07-24_tf_enrichment_results.RData")
+load("results/2024-06-12_kinase_enrichment_result.RData")
+load("data/processed_data/2024-07-24_diff_results.RData")
+```
+
+
+## Secreted proteins
+
+Get a list of all proteins actually secreted
+
+```{r}
+secreted_proteins <- msigdbr::msigdbr(species = "Homo sapiens") %>%
+  filter(gs_id %in% c("M5889", "M5885"))
+```
+
+### additional proteomics hits
+
+```{r}
+additional_secretome <- bind_rows(
+  data.frame(
+    id = c("COL1A1", "COL5A1", "SERPINE2", "SPARC", "ITGB1", "VIM", "JUP", "ACTA1", "HSPG2", "LOXL2", "TNC", "TGFBI", "IGFBP3", "IGFBP7", "LTBP2", "TAGLN", "CCN2", "LRATD2", "MRC2", "FN1", "FBN1", "BGN", "ADGRG1", "MMP2", "ITGA11", "AMIGO2", "ADAM12"),
+    score = 1
+  ),
+  data.frame(
+    id = c("CPA4", "DCDC2", "PLEKHG4", "ITGB1BP1"),
+    score = -1
+  )
+)
+```
+
+### fix TGFb signaling module
+
+```{r}
+additional_edges <- data.frame(
+  source = "TGFB1",
+  mor = 1,
+  target = c("AKT1", "PI3K", "MAPK1", "SMAD1", "SMAD2", "SMAD3", "SMAD4", "SMAD5", "MAPK14")
+)
+```
+
+#2. Network 1
+
+##A Get PKN
+
+```{r}
+pkn_df <- as.data.frame(import_all_interactions()) %>%
+  # remove corrupted resource
+  filter(!(sources == "Wang") &
+    # use only interaction with clear consensus signal
+    (abs(consensus_stimulation) > 0 | abs(consensus_inhibition > 0))) %>%
+  # determine clean sign
+  mutate(sign = consensus_stimulation - consensus_inhibition) %>%
+  # bring in right format
+  select(source = source_genesymbol, mor = sign, target = target_genesymbol) %>%
+  distinct(source, mor, target) %>%
+  # filter for expressed interactions only
+  filter(target %in% unique(diff_results$feature_id) & source %in% unique(diff_results$feature_id)) %>%
+  filter(mor != 0)
+```
+
+##B Filter enzymes and secretome
+
+```{r}
+enzymes_df <-
+  res_kinase_enrichment$enrichment %>%
+  filter(p_value < 0.03 & abs(score) > 3 & time %in% c("0.08h", "1h", "12h")) %>%
+  mutate(abs_score = abs(score)) %>%
+  group_by(source) %>%
+  mutate(max_score = max(abs(score))) %>%
+  filter(max_score == abs_score) %>%
+  distinct(source, score) %>%
+  bind_rows(res_tf_enrichment$enrichment %>%
+    filter(p_value < 0.03 & abs(score) > 3 & time %in% c("0.08h", "1h", "12h")) %>%
+    mutate(abs_score = abs(score)) %>%
+    group_by(source) %>%
+    mutate(max_score = max(abs(score))) %>%
+    filter(max_score == abs_score) %>%
+    distinct(source, score)) %>%
+  ungroup() %>%
+  drop_na() %>%
+  filter(source %in% c(pkn_df$source, pkn_df$target))
+
+secretome_df <- diff_results %>%
+  # get early secretomics hits
+  # make sure they are atctually secreted proteins
+  filter(modality == "secretomics" &
+    adj.P.Val < 0.05 &
+    abs(logFC) > log2(1.5) &
+    time %in% c("0.08h", "1h", "12h", "24h") &
+    feature_id %in% secreted_proteins$gene_symbol | feature_id %in% additional_secretome$id) %>%
+  # calculate consensus score from all included early timepoints
+  mutate(abs_score = abs(logFC), id = feature_id) %>%
+  group_by(id) %>%
+  mutate(max_score = max(abs(logFC))) %>%
+  filter(max_score == abs_score) %>%
+  distinct(id, score = logFC) %>%
+  ungroup() %>%
+  drop_na() %>%
+  # remove TGF as it is the model starting point
+  filter(id != "TGFB1") %>%
+  # remove any enzymes that are upstream in the model (none last time I checked)
+  filter(!(id %in% enzymes_df$source)) %>%
+  distinct(id, .keep_all = T) %>%
+  filter(id %in% c(pkn_df$source, pkn_df$target))
+```
+
+##C PKN parsing
+
+###Downstream neighbours
+
+```{r}
+pkn_df1 <- downstream_neighbours(pkn_df %>% select(source, target, mor), 5, unique(c(enzymes_df$source, secretome_df$id)))
+
+enzymes_df <- enzymes_df %>% filter(source %in% c(pkn_df1$source, pkn_df1$target))
+secretome_df <- secretome_df %>% filter(id %in% c(pkn_df1$source, pkn_df1$target))
+
+pkn_df2 <- downstream_neighbours2(pkn_df1 %>% select(source, target, mor), 5, unique(c(enzymes_df$source, secretome_df$id)))
+
+enzymes_df <- enzymes_df %>% filter(source %in% c(pkn_df2$source, pkn_df2$target))
+secretome_df <- secretome_df %>% filter(id %in% c(pkn_df2$source, pkn_df2$target))
+```
+
+### TF sign filtering
+
+```{r}
+expression_df <- diff_results %>%
+  filter(modality == "rna" | modality == "proteomics" | modality == "secretomics") %>%
+  filter(time %in% c("0.08h", "1h", "12h", "24h")) %>%
+  group_by(modality, feature_id) %>%
+  summarise(signFC = sign(mean(logFC))) %>%
+  group_by(feature_id) %>%
+  summarise(signFC = sign(sum(signFC, na.rm = T))) %>%
+  select(gene = feature_id, signFC)
+
+pkn_df3 <- filter_TF_sign(
+  network = pkn_df2 %>% dplyr::rename(interaction = mor),
+  gene_expression_binarized = expression_df,
+  signaling_data = enzymes_df,
+  tf_regulon = res_tf_enrichment$net_dorothea %>% select(tf = source, target = target, sign = mor)
+) %>%
+  dplyr::rename(mor = interaction) %>%
+  # fix TGF pathway module
+  filter(!grepl("SMAD", target)) %>%
+  bind_rows(additional_edges) %>%
+  distinct(source, mor, target)
+
+enzymes_df <- enzymes_df %>% filter(source %in% c(pkn_df3$source, pkn_df3$target))
+secretome_df <- secretome_df %>% filter(id %in% c(pkn_df3$source, pkn_df3$target))
+```
+
+
+
+#4. Save for optimisation
+
+Input needed for corneto
+
+- pkn_df.tsv comprised of source, mor, target
+- enzymes_df.tsv comprised of source and score
+
+```{r}
+pkn_df3 %>% write_tsv("network_data/2024-06-27/pkn_df.tsv")
+
+# %>%filter(!grepl("SMAD", target)) %>%
+#   bind_rows(additional_edges) %>%
+#   distinct(source, mor, target)
+
+
+enzymes_df %>% write_csv("network_data/2024-06-27/enzymes_df.csv")
+secretome_df %>% write_csv("network_data/2024-06-27/secretome_df.csv")
+```
+
+### for visualisation
+
+```{r}
+res_network_inputs <- list()
+
+res_network_inputs$enzymes_df_early <- enzymes_df
+res_network_inputs$secretome_df_early <- secretome_df
+res_network_inputs$pkn_df_early <- pkn_df2
+
+# this is saved at the end with the late inputs
+```
+
+#3. Network 2
+
+## A Extract info from first run
+
+```{r}
+result_first_df <- read_tsv("network_data/2024-06-27/combinededges_df.tsv") %>%
+  separate(edge, into = c("Node1", "sign", "Node2"), remove = F, sep = "--")
+
+early_secretome <- secretome_df %>%
+  filter(id %in% unique(c(result_first_df$Node1, result_first_df$Node2)))
+```
+
+## B Get PKN
+
+```{r}
+pkn_df <- as.data.frame(import_all_interactions()) %>%
+  # remove corrupted resource
+  filter(!(sources == "Wang") &
+    # use only interaction with clear consensus signal
+    (abs(consensus_stimulation) > 0 | abs(consensus_inhibition > 0))) %>%
+  # determine clean sign
+  mutate(sign = consensus_stimulation - consensus_inhibition) %>%
+  # bring in right format
+  select(source = source_genesymbol, mor = sign, target = target_genesymbol) %>%
+  distinct(source, mor, target) %>%
+  # filter for expressed interactions only
+  filter(target %in% unique(diff_results$feature_id) & source %in% unique(diff_results$feature_id)) %>%
+  filter(mor != 0)
+```
+
+## C Filter enzymes and secretome
+
+```{r}
+perturbation_df <- early_secretome %>%
+  bind_rows(data.frame(id = "TGFB1", score = 1))
+
+enzymes_df <-
+  res_kinase_enrichment$enrichment %>%
+  filter(p_value < 0.03 & abs(score) > 3 & time %in% c("24h", "48h", "72h", "96h")) %>%
+  mutate(abs_score = abs(score)) %>%
+  group_by(source) %>%
+  mutate(max_score = max(abs(score))) %>%
+  filter(max_score == abs_score) %>%
+  distinct(source, score) %>%
+  bind_rows(res_tf_enrichment$enrichment %>%
+    filter(p_value < 0.03 & abs(score) > 3 & time %in% c("24h", "48h", "72h", "96h")) %>%
+    mutate(abs_score = abs(score)) %>%
+    group_by(source) %>%
+    mutate(max_score = max(abs(score))) %>%
+    filter(max_score == abs_score) %>%
+    distinct(source, score)) %>%
+  ungroup() %>%
+  drop_na() %>%
+  filter(source %in% c(pkn_df$source, pkn_df$target))
+
+secretome_df <- diff_results %>%
+  # get early secretomics hits
+  # make sure they are atctually secreted proteins
+  filter(modality == "secretomics" &
+    adj.P.Val < 0.05 &
+    abs(logFC) > log2(1.5) &
+    time %in% c("48h", "72h", "96h") &
+    feature_id %in% secreted_proteins$gene_symbol | feature_id %in% additional_secretome$id) %>%
+  # calculate consensus score from all included early timepoints
+  mutate(abs_score = abs(logFC), id = feature_id) %>%
+  group_by(id) %>%
+  mutate(max_score = max(abs(logFC))) %>%
+  filter(max_score == abs_score) %>%
+  distinct(id, score = logFC) %>%
+  ungroup() %>%
+  drop_na() %>%
+  # remove TGF as it is the model starting point
+  filter(id != "TGFB1") %>%
+  # remove any enzymes that are upstream in the model (none last time I checked)
+  filter(!(id %in% enzymes_df$source)) %>%
+  distinct(id, .keep_all = T) %>%
+  filter(id %in% c(pkn_df$source, pkn_df$target))
+```
+
+##D PKN parsing
+
+### Downstream neighbours
+
+```{r}
+pkn_df1 <- downstream_neighbours(pkn_df %>% select(source, target, mor), 5, unique(c(enzymes_df$source, secretome_df$id, perturbation_df$id)))
+
+enzymes_df <- enzymes_df %>% filter(source %in% c(pkn_df1$source, pkn_df1$target))
+secretome_df <- secretome_df %>% filter(id %in% c(pkn_df1$source, pkn_df1$target))
+perturbation_df <- perturbation_df %>% filter(id %in% c(pkn_df1$source, pkn_df1$target))
+
+pkn_df2 <- downstream_neighbours2(pkn_df1 %>% select(source, target, mor), 5, unique(c(enzymes_df$source, secretome_df$id, perturbation_df$id)))
+
+enzymes_df <- enzymes_df %>% filter(source %in% c(pkn_df2$source, pkn_df2$target))
+secretome_df <- secretome_df %>% filter(id %in% c(pkn_df2$source, pkn_df2$target))
+perturbation_df <- perturbation_df %>% filter(id %in% c(pkn_df2$source, pkn_df2$target))
+```
+
+### TF sign filtering
+
+```{r}
+expression_df <- diff_results %>%
+  filter(modality == "rna" | modality == "proteomics" | modality == "secretomics") %>%
+  filter(time %in% c("72h", "96h")) %>%
+  group_by(modality, feature_id) %>%
+  summarise(signFC = sign(mean(logFC))) %>%
+  group_by(feature_id) %>%
+  summarise(signFC = sign(sum(signFC, na.rm = T))) %>%
+  select(gene = feature_id, signFC)
+
+pkn_df3 <- filter_TF_sign(
+  network = pkn_df2 %>% dplyr::rename(interaction = mor),
+  gene_expression_binarized = expression_df,
+  signaling_data = enzymes_df,
+  tf_regulon = res_tf_enrichment$net_dorothea %>% select(tf = source, target = target, sign = 1)
+) %>%
+  dplyr::rename(mor = interaction) %>%
+  # fix TGF pathway module
+  filter(!grepl("SMAD", target)) %>%
+  bind_rows(additional_edges) %>%
+  distinct(source, mor, target)
+
+enzymes_df <- enzymes_df %>% filter(source %in% c(pkn_df3$source, pkn_df3$target))
+secretome_df <- secretome_df %>% filter(id %in% c(pkn_df3$source, pkn_df3$target))
+perturbation_df <- perturbation_df %>% filter(id %in% c(pkn_df3$source, pkn_df3$target))
+```
+
+##E Save for optimisation
+
+Input needed for corneto
+
+- pkn_df.tsv comprised of source, mor, target
+- enzymes_df.tsv comprised of source and score
+- secretomics df
+- perturbation df
+
+```{r}
+pkn_df3 %>% write_tsv("network_data/2024-06-27/pkn_df_late.tsv")
+
+# %>%filter(!grepl("SMAD", target)) %>%
+#   bind_rows(additional_edges) %>%
+#   distinct(source, mor, target)
+
+
+enzymes_df %>% write_csv("network_data/2024-06-27/enzymes_df_late.csv")
+secretome_df %>% write_csv("network_data/2024-06-27/secretome_df_late.csv")
+perturbation_df %>% write_csv("network_data/2024-06-27/perturbation_df_late.csv")
+```
+
+### for visualisation
+
+```{r}
+res_network_inputs$enzymes_df_late <- enzymes_df
+res_network_inputs$secretome_df_late <- secretome_df
+res_network_inputs$pkn_df_late <- pkn_df2
+```
+
+```{r}
+save(res_network_inputs, file = "network_data/2024-06-27/networkinput_object.RData")
+```

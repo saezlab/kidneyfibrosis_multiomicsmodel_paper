@@ -1,0 +1,81 @@
+---
+title: "Code to generate supplementary tables"
+output:
+  html_document:
+    keep_md: yes
+    toc: yes
+    theme: united
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# General settings
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  include = TRUE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  eval = TRUE,
+  fig.width = 4 * (1 + sqrt(5)) / 2, 
+  fig.height = 4,
+  dpi = 700
+)
+knitr::opts_knit$set(root.dir = "~/Documents/01_repos/kidney_fibrosis/")
+```
+
+## Packages
+
+```{r, message=F, warning =F, include=}
+library(tidyverse)
+library(ggplot2);theme_set(cowplot::theme_cowplot(font_size = 15) + theme(panel.grid.major = element_line(colour = "lightgrey", linewidth = 0.2), panel.grid.minor = element_line(colour = "lightgrey", linewidth = 0.2)))
+library("reshape2")
+library(ggrepel)
+library(knitr)
+library(Biostrings)
+library(RColorBrewer)
+library(visNetwork)
+
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+```
+
+```{r}
+load("data/processed_data/2024-08-15_diff_results.RData")
+load("results/2024-07-24_tf_enrichment_results.RData")
+load("results/2024-07-24_kinase_enrichment_result.RData")
+load("results/2024-09-02_pathwayenrichment_results.RData")
+load("results/2024-08-16_res_network.RData")
+```
+
+
+```{r}
+supplementary_tables <- list(
+  "explanation" = readxl::read_excel(here::here("suppdata_firstpage.xlsx"), sheet = 1),
+  "S1_DEresults" = diff_results %>% select(modality, feature_id, time, logFC, adj.P.Val),
+  "S2_pathwayenrichment" = decoupler_results %>%  filter(statistic == "norm_wmean" & p_value < 0.05 & abs(score) > 1.7),
+  "S3_enzyme_enrichment" = bind_rows("Kinase/phosphatase" = res_kinase_enrichment$enrichment %>%  filter(statistic == "mnorm_wmean" & p_value < 0.03 & abs(score) > 3), "Transcription factor" = res_tf_enrichment$enrichment %>%  filter(p_value < 0.03 & abs(score) > 3), .id= "enzyme_type") %>%  select(enzyme_type, source, time, score, p_value),
+  "S4_network_edgetable" = res_network$combined_edges_df,
+  "S5_network_nodetable" =res_network$node_df,
+  "S6_qPCRprimers" = readxl::read_excel(here::here("supptables_manualpart.xlsx"), sheet = 1),
+  "S7_siRNA_sequences" = readxl::read_excel(here::here("supptables_manualpart.xlsx"), sheet = 2),
+  "S8_initial_imaging" = read.csv("data/NT22_004_Col1_20240127.csv"),
+  "S9_imaging_validation" = read.csv("data/NT24_001_CNA35_20240224.csv"),
+  "S10_qPCR_data" =  read.csv("results/2024-09-19_combined_qPCR_datatable.csv")
+)
+
+supplementary_tables <- lapply(supplementary_tables, as.data.frame)
+
+openxlsx::write.xlsx(supplementary_tables, file = here::here("Supplementary_Data.xlsx"))
+```
+
+```{r}
+
+```
+
+

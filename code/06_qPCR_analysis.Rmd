@@ -1,0 +1,199 @@
+---
+title: "qPCR plots"
+output:
+  html_document:
+    keep_md: yes
+    toc: yes
+    theme: united
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# General settings
+
+```{r setup}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  include = TRUE,
+  cache = TRUE,
+  cache.lazy = FALSE,
+  eval = TRUE,
+  fig.width = 8 * (1 + sqrt(5)) / 2, 
+  fig.height = 8,
+  dpi = 700
+)
+knitr::opts_knit$set(root.dir = "/Users/burtsche/Documents/01_repos/kidney_fibrosis/")
+```
+
+## Packages
+
+```{r, message=F, warning =F, include=F}
+library(tidyverse)
+library(ggplot2);theme_set(cowplot::theme_cowplot(font_size = 15) + theme(panel.grid.major = element_line(colour = "lightgrey", linewidth = 0.2), panel.grid.minor = element_line(colour = "lightgrey", linewidth = 0.2)))
+library("reshape2")
+library(ggrepel)
+library(knitr)
+library(Biostrings)
+library(RColorBrewer)
+library(ggpubr)
+library(rstatix)
+library(gtools)
+library(patchwork)
+
+mutate <- dplyr::mutate
+select <- dplyr::select
+group_by <- dplyr::group_by
+```
+
+```{r}
+options(ggplot2.discrete.colour= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+options(ggplot2.discrete.fill= c("orange3", "darkslateblue", "darkred", "darkgreen", "darkgrey", "darkviolet"))
+```
+
+# 1. Data
+
+Three different rounds of qPCR experiments. Combined for plotting and analysis
+
+```{r}
+data_df_1 <- openxlsx::read.xlsx("data/qPCR_data/qPCR_NT23_009_010_20240123_updated.xlsx")
+data_df_2 <- openxlsx::read.xlsx("data/qPCR_data/qPCR_NT23_013_018_021_NT24_001_20240124.xlsx") # second set of siRNAs
+data_df_3 <- openxlsx::read.xlsx("~/Desktop/qPCR_NT24_004_20240903_list.xlsx")
+```
+
+
+```{r}
+data_df_1$siRNA %>%  unique()
+data_df_2$siRNA %>%  unique()
+data_df_3$siRNA %>%  unique()
+```
+
+Combine and adjust naming
+
+```{r}
+combined <- bind_rows(
+  "set1" = data_df_1 %>%  mutate(siRNA = str_replace(siRNA, "siE2F1", "siE2F1b")),
+  "set2" = data_df_2 %>%
+    mutate(siRNA = str_replace(siRNA, "siSMAD1_C", "siSMAD1b"), siRNA = str_replace(siRNA, "siFLI1", "siFLI1_b")),
+  "set3" = data_df_3 %>%
+    mutate(siRNA = str_replace(siRNA, "siSMAD1_C", "siSMAD1b"), siRNA = str_replace(siRNA, "siE2F1_b", "siE2F1")),
+  .id = "set"
+)
+
+
+```
+
+## save
+
+```{r, eval = F}
+combined %>%  write_csv(here::here(paste0("results/", Sys.Date(), "_combined_qPCR_datatable.csv")))
+```
+
+
+## format data for plotting
+
+```{r}
+data_df <- combined %>%
+  # percentage <= 4000 &
+  filter(DCt < 30)
+
+
+extra_points <- data_df %>% 
+  filter(gene != "GAPDH") %>%
+  filter(treatment == "ctrl", time == "48h") %>% 
+  mutate(treatment = "TGF") %>% 
+  distinct(set, time, percentage, replicate, treatment, gene, siRNA) 
+
+ctl_df <- data_df %>% 
+  filter(gene != "GAPDH") %>%
+  drop_na() %>% 
+  bind_rows(extra_points) %>% 
+  filter(siRNA == "siNeg9") %>% 
+  select(set, gene, time, treatment, replicate, ctl_siNeg9 = percentage)
+
+siRNA_df <- data_df %>% 
+  filter(gene != "GAPDH") %>%
+  drop_na() %>% 
+  bind_rows(extra_points) %>% 
+  filter(siRNA != "siNeg9")%>% 
+  select(set, siRNA, gene, time, treatment, replicate, percentage)
+
+data_df_combined <-  siRNA_df %>% 
+  left_join(ctl_df, by = join_by(set, gene, time, treatment, replicate)) %>% 
+  select(set, gene, siRNA, time, treatment, replicate, ctl_siNeg9, percentage)%>% 
+  melt()
+```
+
+## overview
+
+```{r}
+data_df_combined %>% 
+  group_by(set, siRNA, time, treatment, variable, gene) %>% 
+  summarise(mean = mean(value, na.rm = T), sd =  sd(value, na.rm = T)) %>% 
+  mutate(group = paste(set, variable, treatment, sep = "_"))%>% 
+  #filter(grepl("E2F1", siRNA)) %>% 
+  # remove outlier for plotting
+  filter(mean < 4000) %>% 
+  ggplot(aes(x = time, 
+             y = mean, 
+             colour = treatment, 
+             group = group, 
+             shape = set)) +
+  geom_hline(yintercept = 100) +
+  geom_point() +
+  geom_line(aes(linetype = variable)) +
+  scale_linetype_manual(values = c("ctl_siNeg9" = "dashed", "percentage" = "solid")) +
+  facet_grid(gene ~ siRNA) +
+  ggtitle("Data overview")+
+  #ylim(0, 500)+
+  cowplot::panel_border()
+```
+
+#2. Hit calling
+
+```{r}
+hit_calling <- data_df_combined %>%
+  select(-set) %>% 
+    filter(!(str_detect(siRNA, gene))) %>%
+    group_by(gene, siRNA, time, treatment) %>% 
+    nest(data = c("variable", "replicate", "value")) %>% 
+    mutate(t_test = map(data, function(df) {
+      #print(sd(df$value))
+      df <- df %>%  drop_na()
+      if (sd(df$value) > 0) {
+        df <-  df %>%  rowid_to_column("id")
+        eset <- dcast(df, replicate + id ~ variable, value.var = "value")
+        p <- t.test(eset$ctl_siNeg9, eset$percentage)$p.value
+        return(p)
+      } else {
+        p <- NA
+        return(p)
+      }
+      p <- data.frame(p = p)
+    })) %>% 
+    select(-data) %>%  unnest() %>% 
+  mutate(pstar = stars.pval(t_test))
+```
+
+
+# 3. Save for plots
+
+```{r}
+res_qPCR <- list(
+  "data" = data_df_combined,
+  "pdata" = hit_calling
+)
+
+save(res_qPCR, file = here::here(paste0("results/", Sys.Date(), "_res_qPCR.RData")))
+```
+
+
+```{r}
+
+```
+
+
+
+
