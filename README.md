@@ -12,8 +12,8 @@ Kidney fibrosis, characterized by excessive extracellular matrix (ECM) depositio
 ## Repository structure
 
 - in [*code*](code) all code to redo the included analyses can be found
-- multi-omics and qPCR data analysis is divided upon 6 scripts (01-05) in [*code*](code) 
-- three additional scripts for image preprocessing and analysis are provided for the COL1 imaging experiments in  [*code/COL1_image_analysis*](code/COL1_image_analysis) 
+- multi-omics and qPCR data analysis is divided upon 6 scripts (01-06) in [*code*](code) 
+- three additional scripts for image preprocessing and analysis are provided for the COL1 imaging experiments in  [*code/COL1|ECM_image_analysis*](code/COL1|ECM_image_analysis) 
 - all code to recompute paper figures and tables is provided in  [*code/figures_tables*](code/figures_tables) with one script per figure
 - source data to reproduce plots is provided in [*data*](data) as RData objects
 - raw data is deposited in the linked PRIDE and ArrayExpress repos
