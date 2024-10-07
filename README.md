@@ -13,7 +13,7 @@ Kidney fibrosis, characterized by excessive extracellular matrix (ECM) depositio
 
 - in [*code*](code) all code to redo the included analyses can be found
 - multi-omics and qPCR data analysis is divided upon 6 scripts (01-06) in [*code*](code) 
-- three additional scripts for image preprocessing and analysis are provided for the COL1 imaging experiments in  [*code/COL1|ECM_image_analysis*](code/COL1|ECM_image_analysis) 
+- three additional scripts for image preprocessing with CellProfiler (https://cellprofiler.org) and analysis are provided for the COL1 imaging experiments in  [*code/COL1|ECM_image_analysis*](code/COL1|ECM_image_analysis), example data to test the pipeline is provided in [*data/cellprofiler_data*](data/cellprofiler_data)
 - all code to recompute paper figures and tables is provided in  [*code/figures_tables*](code/figures_tables) with one script per figure
 - source data to reproduce plots is provided in [*data*](data) as RData objects
-- raw data is deposited in the linked PRIDE and ArrayExpress repos
+- raw data is deposited in the linked PRIDE, ArrayExpress and Bioimage archive repos

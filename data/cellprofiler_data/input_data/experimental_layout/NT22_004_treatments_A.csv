@@ -1,0 +1,25 @@
+well,treatments,replicates
+A1,96h ctrl,rep 1
+A2,72h ctrl,rep 1
+A3,48h ctrl,rep 1
+A4,24h ctrl,rep 1
+A5,12h ctrl,rep 1
+A6,0h ctrl,rep 1
+B1,96h ctrl,rep 2
+B2,72h ctrl,rep 2
+B3,48h ctrl,rep 2
+B4,24h ctrl,rep 2
+B5,12h ctrl,rep 2
+B6,unstained,rep 2
+C1,96h TGF,rep 1
+C2,72h TGF,rep 1
+C3,48h TGF,rep 1
+C4,24h TGF,rep 1
+C5,12h TGF,rep 1
+C6,unstained,rep 1
+D1,96h TGF,rep 2
+D2,72h TGF,rep 2
+D3,48h TGF,rep 2
+D4,24h TGF,rep 2
+D5,12h TGF,rep 2
+D6,unstained,rep 2

@@ -1,0 +1,23 @@
+well,treatments,replicates
+A1,siNeg9 TGF,rep 1
+A2,siE2F1a TGF,rep 1
+A3,siE2F1b TGF,rep 1
+A4,siNeg9 TGF,rep 2
+A5,siNeg9 TGF,rep 3
+B1,siNeg9 ctrl,rep 1
+B2,siE2F1a ctrl,rep 1
+B3,siE2F1b ctrl,rep 1
+B4,siNeg9 ctrl,rep 2
+B5,siNeg9 ctrl,rep 3
+C1,siNeg9 unstained,rep 1
+C2,siFLI1a TGF,rep 1
+C3,siFLI1b TGF,rep 1
+C4,siCOL1A175 TGF,rep 1
+C5,siCOL1A176 TGF,rep 1
+C6,siCOL1A177 TGF,rep 1
+D1,siNeg9 unstained,rep 2
+D2,siFLI1a ctrl,rep 1
+D3,siFLI1b ctrl,rep 1
+D4,siCOL1A175 ctrl,rep 1
+D5,siCOL1A176 ctrl,rep 1
+D6,siCOL1A177 ctrl,rep 1
